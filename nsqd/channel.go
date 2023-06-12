@@ -366,35 +366,35 @@ func (c *Channel) FinishMessage(clientID int64, id MessageID) error {
 //
 //	and requeue a message (aka "deferred requeue")
 func (c *Channel) RequeueMessage(clientID int64, id MessageID, timeout time.Duration) error {
-	// remove from inflight first
+	// 先从消费队列中移除
 	msg, err := c.popInFlightMessage(clientID, id)
 	if err != nil {
 		return err
 	}
 	c.removeFromInFlightPQ(msg)
-	atomic.AddUint64(&c.requeueCount, 1)
+	atomic.AddUint64(&c.requeueCount, 1) // 请求数加一
 
-	if timeout == 0 {
-		c.exitMutex.RLock()
-		if c.Exiting() {
+	if timeout == 0 { // 实时任务放到实时队列中
+		c.exitMutex.RLock() // 此频道加读锁
+		if c.Exiting() {    // 此频道已退出,解锁并返回exiting错误对象
 			c.exitMutex.RUnlock()
 			return errors.New("exiting")
 		}
-		err := c.put(msg)
+		err := c.put(msg) // 放到实时队列接收异常对象
 		c.exitMutex.RUnlock()
 		return err
 	}
 
-	// deferred requeue
+	// 延期任务放到延期队列中
 	return c.StartDeferredTimeout(msg, timeout)
 }
 
-// AddClient adds a client to the Channel's client list
+// AddClient将客户端添加到频道Channel的客户端列表中
 func (c *Channel) AddClient(clientID int64, client Consumer) error {
 	c.exitMutex.RLock()
 	defer c.exitMutex.RUnlock()
 
-	if c.Exiting() {
+	if c.Exiting() { // 此频道已退出,返回exiting错误对象
 		return errors.New("exiting")
 	}
 
@@ -407,7 +407,7 @@ func (c *Channel) AddClient(clientID int64, client Consumer) error {
 	}
 
 	maxChannelConsumers := c.nsqd.getOpts().MaxChannelConsumers
-	if maxChannelConsumers != 0 && numClients >= maxChannelConsumers {
+	if maxChannelConsumers != 0 && numClients >= maxChannelConsumers { // 检查是否达到频道channel的客户端连接上限,默认无上限(0)
 		return fmt.Errorf("consumers for %s:%s exceeds limit of %d",
 			c.topicName, c.name, maxChannelConsumers)
 	}
@@ -418,7 +418,7 @@ func (c *Channel) AddClient(clientID int64, client Consumer) error {
 	return nil
 }
 
-// RemoveClient removes a client from the Channel's client list
+// RemoveClient从频道Channel的客户端列表中删除客户端
 func (c *Channel) RemoveClient(clientID int64) {
 	c.exitMutex.RLock()
 	defer c.exitMutex.RUnlock()
@@ -438,7 +438,7 @@ func (c *Channel) RemoveClient(clientID int64) {
 	delete(c.clients, clientID)
 	c.Unlock()
 
-	if len(c.clients) == 0 && c.ephemeral {
+	if len(c.clients) == 0 && c.ephemeral { // 临时频道无客户端连接时触发删除此频道channel
 		go c.deleter.Do(func() { c.deleteCallback(c) })
 	}
 }
@@ -480,7 +480,7 @@ func (c *Channel) pushInFlightMessage(msg *Message) error {
 	return nil
 }
 
-// popInFlightMessage atomically removes a message from the in-flight dictionary
+// popInFlightMessage从飞行中map中自动删除消息
 func (c *Channel) popInFlightMessage(clientID int64, id MessageID) (*Message, error) {
 	c.inFlightMutex.Lock()
 	msg, ok := c.inFlightMessages[id]
@@ -503,6 +503,7 @@ func (c *Channel) addToInFlightPQ(msg *Message) {
 	c.inFlightMutex.Unlock()
 }
 
+// 从飞行中队列(消费队列)中删除指定消息
 func (c *Channel) removeFromInFlightPQ(msg *Message) {
 	c.inFlightMutex.Lock()
 	if msg.index == -1 {
