@@ -443,6 +443,7 @@ func (c *Channel) RemoveClient(clientID int64) {
 	}
 }
 
+// StartInFlightTimeout 设置消费任务的超时时间(纳秒)
 func (c *Channel) StartInFlightTimeout(msg *Message, clientID int64, timeout time.Duration) error {
 	now := time.Now()
 	msg.clientID = clientID
@@ -467,11 +468,11 @@ func (c *Channel) StartDeferredTimeout(msg *Message, timeout time.Duration) erro
 	return nil
 }
 
-// pushInFlightMessage atomically adds a message to the in-flight dictionary
+// pushInFlightMessage自动向飞行中map中添加消息
 func (c *Channel) pushInFlightMessage(msg *Message) error {
 	c.inFlightMutex.Lock()
 	_, ok := c.inFlightMessages[msg.ID]
-	if ok {
+	if ok { // 若此消息已在飞行中(消费中)则返回错误(ID already in flight)对象
 		c.inFlightMutex.Unlock()
 		return errors.New("ID already in flight")
 	}
@@ -497,17 +498,18 @@ func (c *Channel) popInFlightMessage(clientID int64, id MessageID) (*Message, er
 	return msg, nil
 }
 
+// 将消息对象增加到飞行中队列中(消费队列中)
 func (c *Channel) addToInFlightPQ(msg *Message) {
 	c.inFlightMutex.Lock()
 	c.inFlightPQ.Push(msg)
 	c.inFlightMutex.Unlock()
 }
 
-// 从飞行中队列(消费队列)中删除指定消息
+// 从飞行中队列中(消费队列中)删除指定消息
 func (c *Channel) removeFromInFlightPQ(msg *Message) {
 	c.inFlightMutex.Lock()
 	if msg.index == -1 {
-		// this item has already been popped off the pqueue
+		// 该对象已从pqueue队列中取出
 		c.inFlightMutex.Unlock()
 		return
 	}
