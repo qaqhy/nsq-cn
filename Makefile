@@ -22,6 +22,7 @@ $(BLDDIR)/nsq_stat:    $(wildcard apps/nsq_stat/*.go             internal/*/*.go
 $(BLDDIR)/to_nsq:      $(wildcard apps/to_nsq/*.go               internal/*/*.go)
 
 $(BLDDIR)/%:
+	@echo $(BLDDIR)/nsqd
 	@mkdir -p $(dir $@)
 	go build ${BLDFLAGS} -o $@ ./apps/$*
 

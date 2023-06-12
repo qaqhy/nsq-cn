@@ -605,11 +605,11 @@ func (n *NSQD) channels() []*Channel {
 //
 //	1 <= pool <= min(num * 0.25, QueueScanWorkerPoolMax)
 func (n *NSQD) resizePool(num int, workCh chan *Channel, responseCh chan bool, closeCh chan int) {
-	idealPoolSize := int(float64(num) * 0.25)
+	idealPoolSize := int(float64(num) * 0.25) // 队列扫描时的最大工作线程数量渠道数/4
 	if idealPoolSize < 1 {
 		idealPoolSize = 1
 	} else if idealPoolSize > n.getOpts().QueueScanWorkerPoolMax {
-		idealPoolSize = n.getOpts().QueueScanWorkerPoolMax
+		idealPoolSize = n.getOpts().QueueScanWorkerPoolMax // 控制队列扫描时的最大工作线程数量，默认4
 	}
 	for {
 		if idealPoolSize == n.poolSize {

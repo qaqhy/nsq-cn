@@ -15,17 +15,19 @@ const (
 type MessageID [MsgIDLength]byte
 
 type Message struct {
-	ID        MessageID
-	Body      []byte
-	Timestamp int64
-	Attempts  uint16
+	ID        MessageID // ID (持久化)
+	Body      []byte    // 消息体 (持久化)
+	Timestamp int64     // 产生的时间戳 (持久化)
+	Attempts  uint16    // 消息尝试发送的次数 (持久化)
 
 	// for in-flight handling
-	deliveryTS time.Time
-	clientID   int64
-	pri        int64
-	index      int
-	deferred   time.Duration
+	deliveryTS time.Time // 消息被发送时的时间戳
+	clientID   int64     // 产生消息的客户端 ID
+	// NSQ 默认按照消息的时间戳来处理消息, 如果需要指定优先级, 那么就需要指定 pri 字段, NSQ 会根据优先级写入 inFlightQueue 中.
+	// 默认 pri 是规定的消息最晚需要被消费的时间
+	pri      int64         // 消息最晚需要被消费的时间
+	index    int           // 在 InFlight Queue中的下标
+	deferred time.Duration // 消息的延迟发送时间
 }
 
 func NewMessage(id MessageID, body []byte) *Message {

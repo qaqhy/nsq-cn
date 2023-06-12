@@ -26,12 +26,16 @@ func TestPriorityQueue(t *testing.T) {
 	for i := 0; i < c+1; i++ {
 		heap.Push(&pq, &Item{Value: i, Priority: int64(i)})
 	}
+	// for i := c; i >= 0; i-- {
+	// 	heap.Push(&pq, &Item{Value: i, Priority: int64(i)})
+	// }
 	equal(t, pq.Len(), c+1)
 	equal(t, cap(pq), c*2)
 
 	for i := 0; i < c+1; i++ {
 		item := heap.Pop(&pq)
 		equal(t, item.(*Item).Value.(int), i)
+		// t.Logf("%d\n", item.(*Item).Value.(int))
 	}
 	equal(t, cap(pq), c/4)
 }

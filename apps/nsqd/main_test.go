@@ -15,9 +15,12 @@ import (
 func TestConfigFlagParsing(t *testing.T) {
 	opts := nsqd.NewOptions()
 	opts.Logger = test.NewTestLogger(t)
-
+	// v, _ := json.Marshal(opts)
+	// fmt.Printf("opts:%s\n", string(v))
 	flagSet := nsqdFlagSet(opts)
-	flagSet.Parse([]string{})
+	flagSet.Parse([]string{"--data-path=/data/test/nsq"})
+	// v, _ = json.Marshal(opts)
+	// fmt.Printf("opts:%s\n", string(v))
 
 	var cfg config
 	f, err := os.Open("../../contrib/nsqd.cfg.example")
@@ -28,8 +31,12 @@ func TestConfigFlagParsing(t *testing.T) {
 	toml.DecodeReader(f, &cfg)
 	cfg["log_level"] = "debug"
 	cfg.Validate()
+	// v, _ = json.Marshal(cfg)
+	// fmt.Printf("cfg:%s\n", string(v))
 
 	options.Resolve(opts, flagSet, cfg)
+	// v, _ = json.Marshal(opts)
+	// fmt.Printf("opts:%s\n", string(v))
 	nsqd.New(opts)
 
 	if opts.TLSMinVersion != tls.VersionTLS10 {

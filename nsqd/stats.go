@@ -178,15 +178,15 @@ func (n *NSQD) GetStats(topic string, channel string, includeClients bool) Stats
 }
 
 type memStats struct {
-	HeapObjects       uint64 `json:"heap_objects"`
-	HeapIdleBytes     uint64 `json:"heap_idle_bytes"`
-	HeapInUseBytes    uint64 `json:"heap_in_use_bytes"`
-	HeapReleasedBytes uint64 `json:"heap_released_bytes"`
-	GCPauseUsec100    uint64 `json:"gc_pause_usec_100"`
-	GCPauseUsec99     uint64 `json:"gc_pause_usec_99"`
-	GCPauseUsec95     uint64 `json:"gc_pause_usec_95"`
-	NextGCBytes       uint64 `json:"next_gc_bytes"`
-	GCTotalRuns       uint32 `json:"gc_total_runs"`
+	HeapObjects       uint64 `json:"heap_objects"`        // 有多少对象是堆上在分配的，会随着GC和新对象的分配而改变
+	HeapIdleBytes     uint64 `json:"heap_idle_bytes"`     // 空闲堆占用的内存字节数
+	HeapInUseBytes    uint64 `json:"heap_in_use_bytes"`   // 正在使用的堆内存字节数
+	HeapReleasedBytes uint64 `json:"heap_released_bytes"` // 有多少空闲堆已归还操作系统。
+	GCPauseUsec100    uint64 `json:"gc_pause_usec_100"`   // gc暂停100%的次数
+	GCPauseUsec99     uint64 `json:"gc_pause_usec_99"`    // gc暂停99%的次数
+	GCPauseUsec95     uint64 `json:"gc_pause_usec_95"`    // gc暂停95%的次数
+	NextGCBytes       uint64 `json:"next_gc_bytes"`       // 垃圾回收器检视的内存大小
+	GCTotalRuns       uint32 `json:"gc_total_runs"`       // GC运行总数
 }
 
 func getMemStats() memStats {
