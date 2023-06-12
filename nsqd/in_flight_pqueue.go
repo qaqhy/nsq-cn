@@ -1,6 +1,6 @@
 package nsqd
 
-type inFlightPqueue []*Message
+type inFlightPqueue []*Message // 重构小根堆算法为了优化节省container/heap在使用中装箱和接口类型断言操作造成的性能相关成本。
 
 // newInFlightPqueue 生成指定初始容量的堆inFlightPqueue列表对象
 func newInFlightPqueue(capacity int) inFlightPqueue {

@@ -122,8 +122,8 @@ func (s ClientV2Stats) String() string {
 
 type clientV2 struct {
 	// 64bit atomic vars need to be first for proper alignment on 32bit platforms
-	ReadyCount    int64
-	InFlightCount int64
+	ReadyCount    int64 // 客户端设置的读取数据量大小
+	InFlightCount int64 // 客户端消费中队列的实际大小
 	MessageCount  uint64
 	FinishCount   uint64
 	RequeueCount  uint64
@@ -389,41 +389,45 @@ func (p *prettyConnectionState) GetVersion() string {
 	}
 }
 
+// IsReadyForMessages 判断此客户端对应的频道是否可以继续消费任务
 func (c *clientV2) IsReadyForMessages() bool {
-	if c.Channel.IsPaused() {
+	if c.Channel.IsPaused() { // 此频道已停止消费任务
 		return false
 	}
 
-	readyCount := atomic.LoadInt64(&c.ReadyCount)
-	inFlightCount := atomic.LoadInt64(&c.InFlightCount)
+	readyCount := atomic.LoadInt64(&c.ReadyCount)       // 读取客户端设置的读取数据量大小
+	inFlightCount := atomic.LoadInt64(&c.InFlightCount) // 读取客户端消费中队列的实际大小
 
 	c.nsqd.logf(LOG_DEBUG, "[%s] state rdy: %4d inflt: %4d", c, readyCount, inFlightCount)
 
-	if inFlightCount >= readyCount || readyCount <= 0 {
+	if inFlightCount >= readyCount || readyCount <= 0 { // 如果消费中队列
 		return false
 	}
 
 	return true
 }
 
+// SetReadyCount 设置客户端的读取数据量大小,若设置值与旧值不通则发送读取状态更新的通知
 func (c *clientV2) SetReadyCount(count int64) {
-	oldCount := atomic.SwapInt64(&c.ReadyCount, count)
+	oldCount := atomic.SwapInt64(&c.ReadyCount, count) // 设置客户端的读取数据量大小
 
 	if oldCount != count {
 		c.tryUpdateReadyState()
 	}
 }
 
+// tryUpdateReadyState 发送读取状态更新的通知
 func (c *clientV2) tryUpdateReadyState() {
 	// you can always *try* to write to ReadyStateChan because in the cases
 	// where you cannot the message pump loop would have iterated anyway.
 	// the atomic integer operations guarantee correctness of the value.
-	select {
+	select { // 通道有监听下才发送,没有则忽略
 	case c.ReadyStateChan <- 1:
 	default:
 	}
 }
 
+// 更新
 func (c *clientV2) FinishedMessage() {
 	atomic.AddUint64(&c.FinishCount, 1)
 	atomic.AddInt64(&c.InFlightCount, -1)
@@ -452,8 +456,8 @@ func (c *clientV2) TimedOutMessage() {
 }
 
 func (c *clientV2) RequeuedMessage() {
-	atomic.AddUint64(&c.RequeueCount, 1)
-	atomic.AddInt64(&c.InFlightCount, -1)
+	atomic.AddUint64(&c.RequeueCount, 1)  // 重新入队数减一
+	atomic.AddInt64(&c.InFlightCount, -1) // 消费队列数减一
 	c.tryUpdateReadyState()
 }
 

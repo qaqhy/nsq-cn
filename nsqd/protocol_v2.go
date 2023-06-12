@@ -270,7 +270,7 @@ func (p *protocolV2) messagePump(client *clientV2, startedChan chan bool) {
 				goto exit
 			}
 			flushed = true
-		case <-client.ReadyStateChan:
+		case <-client.ReadyStateChan: // 接收到频道的开启或关闭通知
 		case subChannel = <-subEventChan:
 			// you can't SUB anymore
 			subEventChan = nil
@@ -701,29 +701,30 @@ func (p *protocolV2) FIN(client *clientV2, params [][]byte) ([]byte, error) {
 	return nil, nil
 }
 
+// REQ 发送请求将指定消息ID重新加入到消费队列中
 func (p *protocolV2) REQ(client *clientV2, params [][]byte) ([]byte, error) {
-	state := atomic.LoadInt32(&client.State)
-	if state != stateSubscribed && state != stateClosing {
+	state := atomic.LoadInt32(&client.State)               // 获取客户端连接状态
+	if state != stateSubscribed && state != stateClosing { // 客户端如果不是已订阅和关闭状态则直接退出
 		return nil, protocol.NewFatalClientErr(nil, "E_INVALID", "cannot REQ in current state")
 	}
 
-	if len(params) < 3 {
+	if len(params) < 3 { // 请求数据列表参数缺失直接退出
 		return nil, protocol.NewFatalClientErr(nil, "E_INVALID", "REQ insufficient number of params")
 	}
 
-	id, err := getMessageID(params[1])
-	if err != nil {
+	id, err := getMessageID(params[1]) // 验证连线上的字节数并将其强制转换为消息ID
+	if err != nil {                    // 强制转换失败则直接退出
 		return nil, protocol.NewFatalClientErr(nil, "E_INVALID", err.Error())
 	}
 
-	timeoutMs, err := protocol.ByteToBase10(params[2])
+	timeoutMs, err := protocol.ByteToBase10(params[2]) // 获取需要延迟的时间(毫秒)
 	if err != nil {
 		return nil, protocol.NewFatalClientErr(err, "E_INVALID",
 			fmt.Sprintf("REQ could not parse timeout %s", params[2]))
 	}
 	timeoutDuration := time.Duration(timeoutMs) * time.Millisecond
 
-	maxReqTimeout := p.nsqd.getOpts().MaxReqTimeout
+	maxReqTimeout := p.nsqd.getOpts().MaxReqTimeout // 默认最长设置延迟时间1小时
 	clampedTimeout := timeoutDuration
 
 	if timeoutDuration < 0 {
@@ -731,19 +732,19 @@ func (p *protocolV2) REQ(client *clientV2, params [][]byte) ([]byte, error) {
 	} else if timeoutDuration > maxReqTimeout {
 		clampedTimeout = maxReqTimeout
 	}
-	if clampedTimeout != timeoutDuration {
+	if clampedTimeout != timeoutDuration { // 控制延迟时间clampedTimeout后与设置延迟时间不等时打印日志输出
 		p.nsqd.logf(LOG_INFO, "PROTOCOL(V2): [%s] REQ timeout %d out of range 0-%d. Setting to %d",
 			client, timeoutDuration, maxReqTimeout, clampedTimeout)
 		timeoutDuration = clampedTimeout
 	}
 
-	err = client.Channel.RequeueMessage(client.ID, *id, timeoutDuration)
+	err = client.Channel.RequeueMessage(client.ID, *id, timeoutDuration) // 向通道提交需要重新入消费队列的任务
 	if err != nil {
 		return nil, protocol.NewClientErr(err, "E_REQ_FAILED",
 			fmt.Sprintf("REQ %s failed %s", *id, err.Error()))
 	}
 
-	client.RequeuedMessage()
+	client.RequeuedMessage() // 计数统计更新
 
 	return nil, nil
 }
@@ -999,7 +1000,7 @@ func readMPUB(r io.Reader, tmp []byte, topic *Topic, maxMessageSize int64, maxBo
 	return messages, nil
 }
 
-// validate and cast the bytes on the wire to a message ID
+// 验证连线上的字节数并将其强制转换为消息ID
 func getMessageID(p []byte) (*MessageID, error) {
 	if len(p) != MsgIDLength {
 		return nil, errors.New("invalid message ID")

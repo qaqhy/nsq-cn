@@ -123,6 +123,7 @@ func NewChannel(topicName string, channelName string, nsqd *NSQD,
 	return c
 }
 
+// initPQ 初始化飞行中map/飞行中队列/延迟map/延迟队列对象
 func (c *Channel) initPQ() {
 	pqSize := int(math.Max(1, float64(c.nsqd.getOpts().MemQueueSize)/10))
 
@@ -137,21 +138,22 @@ func (c *Channel) initPQ() {
 	c.deferredMutex.Unlock()
 }
 
-// Exiting returns a boolean indicating if this channel is closed/exiting
+// Exiting 返回一个布尔值,指示此频道是否已关闭/正在退出
 func (c *Channel) Exiting() bool {
 	return atomic.LoadInt32(&c.exitFlag) == 1
 }
 
-// Delete empties the channel and closes
+// Delete 清空频道并关闭退出
 func (c *Channel) Delete() error {
 	return c.exit(true)
 }
 
-// Close cleanly closes the Channel
+// Close 干净地关闭频道
 func (c *Channel) Close() error {
 	return c.exit(false)
 }
 
+// exit 频道退出传入布尔值,true为删除,false为优雅关闭
 func (c *Channel) exit(deleted bool) error {
 	c.exitMutex.Lock()
 	defer c.exitMutex.Unlock()
@@ -183,11 +185,12 @@ func (c *Channel) exit(deleted bool) error {
 		return c.backend.Delete()
 	}
 
-	// write anything leftover to disk
+	// 将剩余的所有消息写入到磁盘
 	c.flush()
 	return c.backend.Close()
 }
 
+// Empty 清空此频道下的所有数据,包括客户端连接对象
 func (c *Channel) Empty() error {
 	c.Lock()
 	defer c.Unlock()
@@ -209,8 +212,8 @@ finish:
 	return c.backend.Empty()
 }
 
-// flush persists all the messages in internal memory buffers to the backend
-// it does not drain inflight/deferred because it is only called in Close()
+// flush 将内部内存缓冲区中的所有消息持久化到磁盘文件中
+// 它不会消费飞行中/延迟中被调用,因为它只在Close()中调用
 func (c *Channel) flush() error {
 	if len(c.memoryMsgChan) > 0 || len(c.inFlightMessages) > 0 || len(c.deferredMessages) > 0 {
 		c.nsqd.logf(LOG_INFO, "CHANNEL(%s): flushing %d memory %d in-flight %d deferred messages to backend",
@@ -219,7 +222,7 @@ func (c *Channel) flush() error {
 
 	for {
 		select {
-		case msg := <-c.memoryMsgChan:
+		case msg := <-c.memoryMsgChan: // 读取所有内存中的消息持久化到磁盘中
 			err := writeMessageToBackend(msg, c.backend)
 			if err != nil {
 				c.nsqd.logf(LOG_ERROR, "failed to write message to backend - %s", err)
@@ -231,7 +234,7 @@ func (c *Channel) flush() error {
 
 finish:
 	c.inFlightMutex.Lock()
-	for _, msg := range c.inFlightMessages {
+	for _, msg := range c.inFlightMessages { // 读取所有消费中的消息持久化到磁盘中
 		err := writeMessageToBackend(msg, c.backend)
 		if err != nil {
 			c.nsqd.logf(LOG_ERROR, "failed to write message to backend - %s", err)
@@ -240,7 +243,7 @@ finish:
 	c.inFlightMutex.Unlock()
 
 	c.deferredMutex.Lock()
-	for _, item := range c.deferredMessages {
+	for _, item := range c.deferredMessages { // 读取所有延迟中的消息持久化到磁盘中
 		msg := item.Value.(*Message)
 		err := writeMessageToBackend(msg, c.backend)
 		if err != nil {
@@ -252,18 +255,22 @@ finish:
 	return nil
 }
 
+// Depth 获取内存通道和磁盘队列中消息的数量
 func (c *Channel) Depth() int64 {
 	return int64(len(c.memoryMsgChan)) + c.backend.Depth()
 }
 
+// Pause 设置频道暂停分发消息
 func (c *Channel) Pause() error {
 	return c.doPause(true)
 }
 
+// UnPause 设置频道开启分发消息
 func (c *Channel) UnPause() error {
 	return c.doPause(false)
 }
 
+// doPause 设置频道和客户端连接的暂停和启动操作,有pause参数控制
 func (c *Channel) doPause(pause bool) error {
 	if pause {
 		atomic.StoreInt32(&c.paused, 1)
@@ -283,11 +290,12 @@ func (c *Channel) doPause(pause bool) error {
 	return nil
 }
 
+// IsPaused 判断此频道是否暂停分发消息
 func (c *Channel) IsPaused() bool {
 	return atomic.LoadInt32(&c.paused) == 1
 }
 
-// PutMessage writes a Message to the queue
+// PutMessage 将消息写入到队列中
 func (c *Channel) PutMessage(m *Message) error {
 	c.exitMutex.RLock()
 	defer c.exitMutex.RUnlock()
@@ -302,6 +310,7 @@ func (c *Channel) PutMessage(m *Message) error {
 	return nil
 }
 
+// put 写入消息对象到对应频道channel的队列中,优先写到内存队列中,当写满时写到磁盘队列中
 func (c *Channel) put(m *Message) error {
 	select {
 	case c.memoryMsgChan <- m:
@@ -317,20 +326,21 @@ func (c *Channel) put(m *Message) error {
 	return nil
 }
 
+// PutMessageDeferred 将消息发送到延迟队列中,并消息总数加一
 func (c *Channel) PutMessageDeferred(msg *Message, timeout time.Duration) {
 	atomic.AddUint64(&c.messageCount, 1)
 	c.StartDeferredTimeout(msg, timeout)
 }
 
-// TouchMessage resets the timeout for an in-flight message
+// TouchMessage 重置飞行中消息的超时设置
 func (c *Channel) TouchMessage(clientID int64, id MessageID, clientMsgTimeout time.Duration) error {
-	msg, err := c.popInFlightMessage(clientID, id)
+	msg, err := c.popInFlightMessage(clientID, id) // 取出消费中指定的消息对象
 	if err != nil {
 		return err
 	}
-	c.removeFromInFlightPQ(msg)
+	c.removeFromInFlightPQ(msg) // 将指定消息对象从消费队列中移除
 
-	newTimeout := time.Now().Add(clientMsgTimeout)
+	newTimeout := time.Now().Add(clientMsgTimeout) // 设置当前时间加上超时时间为截至时间
 	if newTimeout.Sub(msg.deliveryTS) >=
 		c.nsqd.getOpts().MaxMsgTimeout {
 		// we would have gone over, set to the max
@@ -346,25 +356,25 @@ func (c *Channel) TouchMessage(clientID int64, id MessageID, clientMsgTimeout ti
 	return nil
 }
 
-// FinishMessage successfully discards an in-flight message
+// FinishMessage 成功消费飞行中的消息
 func (c *Channel) FinishMessage(clientID int64, id MessageID) error {
-	msg, err := c.popInFlightMessage(clientID, id)
+	msg, err := c.popInFlightMessage(clientID, id) // 从飞行中map中删除并获取消息对象
 	if err != nil {
 		return err
 	}
-	c.removeFromInFlightPQ(msg)
-	if c.e2eProcessingLatencyStream != nil {
-		c.e2eProcessingLatencyStream.Insert(msg.Timestamp)
+	c.removeFromInFlightPQ(msg)              // 从飞行中队列中(消费队列中)删除指定消息
+	if c.e2eProcessingLatencyStream != nil { // 存在跟踪消息对象时执行下面操作
+		c.e2eProcessingLatencyStream.Insert(msg.Timestamp) // 将此消息从生成到消费所消耗时间更新到统计信息中
 	}
 	return nil
 }
 
-// RequeueMessage requeues a message based on `time.Duration`, ie:
+// RequeueMessage 根据“time.Duration”重新排队消息，即：
 //
-// `timeoutMs` == 0 - requeue a message immediately
-// `timeoutMs`  > 0 - asynchronously wait for the specified timeout
+// `timeoutMs` == 0 - 立即重新排队
+// `timeoutMs`  > 0 - 异步等待指定的超时
 //
-//	and requeue a message (aka "deferred requeue")
+// 并重新排队发送消息（也称为“延迟排队”）
 func (c *Channel) RequeueMessage(clientID int64, id MessageID, timeout time.Duration) error {
 	// 先从消费队列中移除
 	msg, err := c.popInFlightMessage(clientID, id)
@@ -443,20 +453,21 @@ func (c *Channel) RemoveClient(clientID int64) {
 	}
 }
 
-// StartInFlightTimeout 设置消费任务的超时时间(纳秒)
+// StartInFlightTimeout 开始消费任务并设置任务的截至时间
 func (c *Channel) StartInFlightTimeout(msg *Message, clientID int64, timeout time.Duration) error {
 	now := time.Now()
-	msg.clientID = clientID
-	msg.deliveryTS = now
-	msg.pri = now.Add(timeout).UnixNano()
-	err := c.pushInFlightMessage(msg)
+	msg.clientID = clientID               // 设置消费此消息的客户端ID
+	msg.deliveryTS = now                  // 设置消息被发送时的时间戳
+	msg.pri = now.Add(timeout).UnixNano() // 设置消费此消息的截至时间戳(纳秒)
+	err := c.pushInFlightMessage(msg)     // 向飞行中map中添加此消息
 	if err != nil {
 		return err
 	}
-	c.addToInFlightPQ(msg)
+	c.addToInFlightPQ(msg) // 向飞行中队列中(消费队列中)添加此消息
 	return nil
 }
 
+// StartDeferredTimeout 将延迟任务加入到延迟队列中
 func (c *Channel) StartDeferredTimeout(msg *Message, timeout time.Duration) error {
 	absTs := time.Now().Add(timeout).UnixNano()
 	item := &pqueue.Item{Value: msg, Priority: absTs}
@@ -468,7 +479,7 @@ func (c *Channel) StartDeferredTimeout(msg *Message, timeout time.Duration) erro
 	return nil
 }
 
-// pushInFlightMessage自动向飞行中map中添加消息
+// pushInFlightMessage 向飞行中map中添加消息
 func (c *Channel) pushInFlightMessage(msg *Message) error {
 	c.inFlightMutex.Lock()
 	_, ok := c.inFlightMessages[msg.ID]
@@ -481,7 +492,7 @@ func (c *Channel) pushInFlightMessage(msg *Message) error {
 	return nil
 }
 
-// popInFlightMessage从飞行中map中自动删除消息
+// popInFlightMessage 从飞行中map中删除指定消息对象
 func (c *Channel) popInFlightMessage(clientID int64, id MessageID) (*Message, error) {
 	c.inFlightMutex.Lock()
 	msg, ok := c.inFlightMessages[id]
@@ -498,25 +509,25 @@ func (c *Channel) popInFlightMessage(clientID int64, id MessageID) (*Message, er
 	return msg, nil
 }
 
-// 将消息对象增加到飞行中队列中(消费队列中)
+// addToInFlightPQ 将消息对象增加到飞行中队列中(消费队列中)
 func (c *Channel) addToInFlightPQ(msg *Message) {
 	c.inFlightMutex.Lock()
-	c.inFlightPQ.Push(msg)
+	c.inFlightPQ.Push(msg) // 将数据加入到pqueue队列中
 	c.inFlightMutex.Unlock()
 }
 
-// 从飞行中队列中(消费队列中)删除指定消息
+// removeFromInFlightPQ 从飞行中队列中(消费队列中)删除指定消息
 func (c *Channel) removeFromInFlightPQ(msg *Message) {
 	c.inFlightMutex.Lock()
-	if msg.index == -1 {
-		// 该对象已从pqueue队列中取出
+	if msg.index == -1 { // 该数据从pqueue队列中取出时会标记index = -1
 		c.inFlightMutex.Unlock()
 		return
 	}
-	c.inFlightPQ.Remove(msg.index)
+	c.inFlightPQ.Remove(msg.index) // 从pqueue队列中移除指定下标下的数据
 	c.inFlightMutex.Unlock()
 }
 
+// pushDeferredMessage 向延迟map中添加消息
 func (c *Channel) pushDeferredMessage(item *pqueue.Item) error {
 	c.deferredMutex.Lock()
 	// TODO: these map lookups are costly
@@ -531,6 +542,7 @@ func (c *Channel) pushDeferredMessage(item *pqueue.Item) error {
 	return nil
 }
 
+// popDeferredMessage 从延迟map中删除指定消息对象
 func (c *Channel) popDeferredMessage(id MessageID) (*pqueue.Item, error) {
 	c.deferredMutex.Lock()
 	// TODO: these map lookups are costly
@@ -544,6 +556,7 @@ func (c *Channel) popDeferredMessage(id MessageID) (*pqueue.Item, error) {
 	return item, nil
 }
 
+// addToDeferredPQ 将消息对象增加到延迟队列中
 func (c *Channel) addToDeferredPQ(item *pqueue.Item) {
 	c.deferredMutex.Lock()
 	heap.Push(&c.deferredPQ, item)
