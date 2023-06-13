@@ -14,7 +14,7 @@ func (pq inFlightPqueue) Swap(i, j int) {
 	pq[j].index = j
 }
 
-// Push 存储数据到堆中
+// Push 存储数据到堆中 O(logN)
 func (pq *inFlightPqueue) Push(x *Message) {
 	n := len(*pq)
 	c := cap(*pq)
@@ -29,7 +29,7 @@ func (pq *inFlightPqueue) Push(x *Message) {
 	pq.up(n)     // 末尾数据上浮
 }
 
-// Pop 删除并取出堆顶数据
+// Pop 删除并取出堆顶数据 O(logN)
 func (pq *inFlightPqueue) Pop() *Message {
 	n := len(*pq)
 	c := cap(*pq)
@@ -46,7 +46,7 @@ func (pq *inFlightPqueue) Pop() *Message {
 	return x
 }
 
-// Remove 删除并返回指定坐标下的数据
+// Remove 删除并返回指定坐标下的数据 O(logN)
 func (pq *inFlightPqueue) Remove(i int) *Message {
 	n := len(*pq)
 	if n-1 != i { // 删除数据不是队列最后一个元素时,将更新队列前面的数据
@@ -75,7 +75,7 @@ func (pq *inFlightPqueue) PeekAndShift(max int64) (*Message, int64) {
 	return x, 0
 }
 
-// up 数据上浮
+// up 数据上浮 O(logN)
 func (pq *inFlightPqueue) up(j int) {
 	for {
 		i := (j - 1) / 2                            // 父节点
@@ -87,7 +87,7 @@ func (pq *inFlightPqueue) up(j int) {
 	}
 }
 
-// down 数据下沉
+// down 数据下沉 O(logN)
 func (pq *inFlightPqueue) down(i, n int) {
 	for {
 		j1 := 2*i + 1

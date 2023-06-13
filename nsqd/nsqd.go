@@ -77,49 +77,49 @@ func New(opts *Options) (*NSQD, error) {
 	var err error
 
 	dataPath := opts.DataPath
-	if opts.DataPath == "" {
+	if opts.DataPath == "" { // 检查是否设置磁盘数据存放根路径，若未设置则设置当前可执行文件的上级路径为磁盘数据存放根路径
 		cwd, _ := os.Getwd()
 		dataPath = cwd
 	}
-	if opts.Logger == nil {
+	if opts.Logger == nil { // 未设置日志对象，则初始化日志对象
 		opts.Logger = log.New(os.Stderr, opts.LogPrefix, log.Ldate|log.Ltime|log.Lmicroseconds)
 	}
 
 	n := &NSQD{
-		startTime:            time.Now(),
-		topicMap:             make(map[string]*Topic),
-		exitChan:             make(chan int),
-		notifyChan:           make(chan interface{}),
-		optsNotificationChan: make(chan struct{}, 1),
-		dl:                   dirlock.New(dataPath),
+		startTime:            time.Now(),              // nsqd启动时间，用于nsqd运行信息和统计信息展示
+		topicMap:             make(map[string]*Topic), // topicMap对象，用于存放所有的topic与channel之间的关系
+		exitChan:             make(chan int),          // nsqd服务退出通知通道
+		notifyChan:           make(chan interface{}),  // 通知通道，用于topic、channel对象创建和退出信号的通知使用
+		optsNotificationChan: make(chan struct{}, 1),  // 配置修改通道，用于修改时热加载配置信息
+		dl:                   dirlock.New(dataPath),   // data目录锁
 	}
 	n.ctx, n.ctxCancel = context.WithCancel(context.Background())
 	httpcli := http_api.NewClient(nil, opts.HTTPClientConnectTimeout, opts.HTTPClientRequestTimeout)
-	n.ci = clusterinfo.New(n.logf, httpcli)
+	n.ci = clusterinfo.New(n.logf, httpcli) // nsqd仅用于同步topic下注册的所有channel，后续会讲解所使用的地方
 
-	n.lookupPeers.Store([]*lookupPeer{})
+	n.lookupPeers.Store([]*lookupPeer{}) // 缓存空的服务发现对象列表，后面lookupLoop协程会更新，用于n.ci对象同步注册信息的参数
 
-	n.swapOpts(opts)
-	n.errValue.Store(errStore{})
+	n.swapOpts(opts)             // 缓存opts对象到n.opts对象中
+	n.errValue.Store(errStore{}) // 设置空错误结构体，后面用于http协议下的ping命令检查返回
 
-	err = n.dl.Lock()
+	err = n.dl.Lock() // 上目录锁，这里内部具体方法还未做实现，目前形同虚设
 	if err != nil {
 		return nil, fmt.Errorf("failed to lock data-path: %v", err)
 	}
 
-	if opts.MaxDeflateLevel < 1 || opts.MaxDeflateLevel > 9 {
+	if opts.MaxDeflateLevel < 1 || opts.MaxDeflateLevel > 9 { // 控制客户端deflate压缩数据等级范围[1,9]，用于客户端下使用compress/flate包对应的NewWriter方法，代码fw, _ := flate.NewWriter(conn, level)
 		return nil, errors.New("--max-deflate-level must be [1,9]")
 	}
 
-	if opts.ID < 0 || opts.ID >= 1024 {
+	if opts.ID < 0 || opts.ID >= 1024 { // 节点ID范围控制[0,1024)
 		return nil, errors.New("--node-id must be [0,1024)")
 	}
 
-	if opts.TLSClientAuthPolicy != "" && opts.TLSRequired == TLSNotRequired {
+	if opts.TLSClientAuthPolicy != "" && opts.TLSRequired == TLSNotRequired { // tls客户端身份验证策略检查，若存在则修改设置漏掉的参数tls-required
 		opts.TLSRequired = TLSRequired
 	}
 
-	tlsConfig, err := buildTLSConfig(opts)
+	tlsConfig, err := buildTLSConfig(opts) // 根据opts对象生成tls配置对象
 	if err != nil {
 		return nil, fmt.Errorf("failed to build TLS config - %s", err)
 	}
@@ -128,47 +128,47 @@ func New(opts *Options) (*NSQD, error) {
 	}
 	n.tlsConfig = tlsConfig
 
-	for _, v := range opts.E2EProcessingLatencyPercentiles {
+	for _, v := range opts.E2EProcessingLatencyPercentiles { // 性能评估百分位数范围限制(0.00,1.00]
 		if v <= 0 || v > 1 {
 			return nil, fmt.Errorf("invalid E2E processing latency percentile: %v", v)
 		}
 	}
 
-	n.logf(LOG_INFO, version.String("nsqd"))
-	n.logf(LOG_INFO, "ID: %d", opts.ID)
+	n.logf(LOG_INFO, version.String("nsqd")) // nsqd版本号输出
+	n.logf(LOG_INFO, "ID: %d", opts.ID)      // nsqd节点ID
 
-	n.tcpServer = &tcpServer{nsqd: n}
-	n.tcpListener, err = net.Listen(util.TypeOfAddr(opts.TCPAddress), opts.TCPAddress)
+	n.tcpServer = &tcpServer{nsqd: n}                                                  // 初始化tcpServer对象
+	n.tcpListener, err = net.Listen(util.TypeOfAddr(opts.TCPAddress), opts.TCPAddress) // 初始化tcpListener对象
 	if err != nil {
 		return nil, fmt.Errorf("listen (%s) failed - %s", opts.TCPAddress, err)
 	}
-	if opts.HTTPAddress != "" {
+	if opts.HTTPAddress != "" { // HTTPAddress存在则初始化httpListener对象
 		n.httpListener, err = net.Listen(util.TypeOfAddr(opts.HTTPAddress), opts.HTTPAddress)
 		if err != nil {
 			return nil, fmt.Errorf("listen (%s) failed - %s", opts.HTTPAddress, err)
 		}
 	}
-	if n.tlsConfig != nil && opts.HTTPSAddress != "" {
+	if n.tlsConfig != nil && opts.HTTPSAddress != "" { // tlsConfig和HTTPSAddress 存在则初始化httpsListener对象
 		n.httpsListener, err = tls.Listen("tcp", opts.HTTPSAddress, n.tlsConfig)
 		if err != nil {
 			return nil, fmt.Errorf("listen (%s) failed - %s", opts.HTTPSAddress, err)
 		}
 	}
-	if opts.BroadcastHTTPPort == 0 {
+	if opts.BroadcastHTTPPort == 0 { // 广播HTTP端口号不存在则将httpListener对应端口号做广播端口号
 		tcpAddr, ok := n.RealHTTPAddr().(*net.TCPAddr)
 		if ok {
 			opts.BroadcastHTTPPort = tcpAddr.Port
 		}
 	}
 
-	if opts.BroadcastTCPPort == 0 {
+	if opts.BroadcastTCPPort == 0 { // 广播TCP端口号不存在则将tcpListener对应端口号做广播端口号
 		tcpAddr, ok := n.RealTCPAddr().(*net.TCPAddr)
 		if ok {
 			opts.BroadcastTCPPort = tcpAddr.Port
 		}
 	}
 
-	if opts.StatsdPrefix != "" {
+	if opts.StatsdPrefix != "" { // 设置统计前缀时则更新统计前缀
 		var port string = fmt.Sprint(opts.BroadcastHTTPPort)
 		statsdHostKey := statsd.HostKey(net.JoinHostPort(opts.BroadcastAddress, port))
 		prefixWithHost := strings.Replace(opts.StatsdPrefix, "%s", statsdHostKey, -1)
@@ -338,53 +338,52 @@ func writeSyncFile(fn string, data []byte) error {
 	return err
 }
 
+// LoadMetadata 加载元数据
 func (n *NSQD) LoadMetadata() error {
-	atomic.StoreInt32(&n.isLoading, 1)
-	defer atomic.StoreInt32(&n.isLoading, 0)
+	atomic.StoreInt32(&n.isLoading, 1)       // 设置nsqd对象为加载状态
+	defer atomic.StoreInt32(&n.isLoading, 0) // LoadMetadata方法退出时取消加载状态
 
-	fn := newMetadataFile(n.getOpts())
+	fn := newMetadataFile(n.getOpts()) // 获取nsqd.dat文件地址
 
-	data, err := readOrEmpty(fn)
+	data, err := readOrEmpty(fn) // 获取nsqd.dat文件数据
 	if err != nil {
 		return err
 	}
-	if data == nil {
+	if data == nil { // nsqd第一次启动，没有任何元数据
 		return nil // fresh start
 	}
 
 	var m Metadata
-	err = json.Unmarshal(data, &m)
+	err = json.Unmarshal(data, &m) // 序列化元数据
 	if err != nil {
 		return fmt.Errorf("failed to parse metadata in %s - %s", fn, err)
 	}
 
-	for _, t := range m.Topics {
+	for _, t := range m.Topics { // 遍历初始化topic
 		if !protocol.IsValidTopicName(t.Name) {
 			n.logf(LOG_WARN, "skipping creation of invalid topic %s", t.Name)
 			continue
 		}
-		topic := n.GetTopic(t.Name)
+		topic := n.GetTopic(t.Name) // ***重点：获取topic对象，此方法下逻辑相对比较复杂，下面会提出来详解
 		if t.Paused {
 			topic.Pause()
 		}
-		for _, c := range t.Channels {
+		for _, c := range t.Channels { // 遍历初始化topic对应的所有channel
 			if !protocol.IsValidChannelName(c.Name) {
 				n.logf(LOG_WARN, "skipping creation of invalid channel %s", c.Name)
 				continue
 			}
-			channel := topic.GetChannel(c.Name)
+			channel := topic.GetChannel(c.Name) // 获取channel对象，channel不存在则创建同时通知到topic的channelUpdateChan通道中，使topic对应的消息泵messagePump更新需要同步分发消息msg的channel列表
 			if c.Paused {
 				channel.Pause()
 			}
 		}
-		topic.Start()
+		topic.Start() // 通知此topic对应的消息泵messagePump启动
 	}
 	return nil
 }
 
-// GetMetadata retrieves the current topic and channel set of the NSQ daemon. If
-// the ephemeral flag is set, ephemeral topics are also returned even though these
-// are not saved to disk.
+// GetMetadata 检索获取NSQ守护进程的当前所有主题topic和通道channel集。如果设置了ephemeral标志，也会返回ephemeral主题topic，尽管这些主题topic没有被保存到磁盘。
 func (n *NSQD) GetMetadata(ephemeral bool) *Metadata {
 	meta := &Metadata{
 		Version: version.Binary,
@@ -413,23 +412,24 @@ func (n *NSQD) GetMetadata(ephemeral bool) *Metadata {
 	return meta
 }
 
+// PersistMetadata 持久元数据
 func (n *NSQD) PersistMetadata() error {
-	// persist metadata about what topics/channels we have, across restarts
+	// 持久化我们所拥有的主题topic和频道channel信息
 	fileName := newMetadataFile(n.getOpts())
 
 	n.logf(LOG_INFO, "NSQ: persisting topic/channel metadata to %s", fileName)
 
-	data, err := json.Marshal(n.GetMetadata(false))
+	data, err := json.Marshal(n.GetMetadata(false)) // json序列化元数据结构体，准备持久化到元数据文件中
 	if err != nil {
 		return err
 	}
 	tmpFileName := fmt.Sprintf("%s.%d.tmp", fileName, rand.Int())
 
-	err = writeSyncFile(tmpFileName, data)
+	err = writeSyncFile(tmpFileName, data) // 同步到临时元数据文件中
 	if err != nil {
 		return err
 	}
-	err = os.Rename(tmpFileName, fileName)
+	err = os.Rename(tmpFileName, fileName) // 将临时元数据文件名更新为正式的元数据文件名
 	if err != nil {
 		return err
 	}
@@ -443,19 +443,19 @@ func (n *NSQD) Exit() {
 		// avoid double call
 		return
 	}
-	if n.tcpListener != nil {
+	if n.tcpListener != nil { // tcpListener对象存在则优雅关闭
 		n.tcpListener.Close()
 	}
 
-	if n.tcpServer != nil {
+	if n.tcpServer != nil { // tcpServer对象存在则优雅关闭
 		n.tcpServer.Close()
 	}
 
-	if n.httpListener != nil {
+	if n.httpListener != nil { // httpListener对象存在则优雅关闭
 		n.httpListener.Close()
 	}
 
-	if n.httpsListener != nil {
+	if n.httpsListener != nil { // httpsListener对象存在则优雅关闭
 		n.httpsListener.Close()
 	}
 
@@ -471,8 +471,8 @@ func (n *NSQD) Exit() {
 	n.Unlock()
 
 	n.logf(LOG_INFO, "NSQ: stopping subsystems")
-	close(n.exitChan)
-	n.waitGroup.Wait()
+	close(n.exitChan)  // 通知所有协程nsqd将开始优雅退出
+	n.waitGroup.Wait() // 等待所有协程退出
 	n.dl.Unlock()
 	n.logf(LOG_INFO, "NSQ: bye")
 	n.ctxCancel()
@@ -547,7 +547,7 @@ func (n *NSQD) GetExistingTopic(topicName string) (*Topic, error) {
 	return topic, nil
 }
 
-// DeleteExistingTopic removes a topic only if it exists
+// DeleteExistingTopic 只在topic存在的情况下删除该topic
 func (n *NSQD) DeleteExistingTopic(topicName string) error {
 	n.RLock()
 	topic, ok := n.topicMap[topicName]
@@ -557,12 +557,12 @@ func (n *NSQD) DeleteExistingTopic(topicName string) error {
 	}
 	n.RUnlock()
 
-	// delete empties all channels and the topic itself before closing
-	// (so that we dont leave any messages around)
+	// 在关闭之前删除所有频道channel和主题topic本身。
+	// (这样我们就不会留下任何信息)
 	//
-	// we do this before removing the topic from map below (with no lock)
-	// so that any incoming writes will error and not create a new topic
-	// to enforce ordering
+	// 我们在从下面的map中删除主题之前做上锁。
+	// 这样，任何传入的写入都会阻塞等待锁，而不会创建一个新的主题。
+	// 强制执行
 	topic.Delete()
 
 	n.Lock()
@@ -572,17 +572,15 @@ func (n *NSQD) DeleteExistingTopic(topicName string) error {
 	return nil
 }
 
+// Notify 将topic和channel对象变动情况通知到lookupLoop协程中注册或注销
 func (n *NSQD) Notify(v interface{}, persist bool) {
-	// since the in-memory metadata is incomplete,
-	// should not persist metadata while loading it.
-	// nsqd will call `PersistMetadata` it after loading
+	// 由于内存中的元数据不完整，因此在加载时不应保留元数据。nsqd将在加载后调用PersistMetadata持久元数据方法
 	loading := atomic.LoadInt32(&n.isLoading) == 1
 	n.waitGroup.Wrap(func() {
-		// by selecting on exitChan we guarantee that
-		// we do not block exit, see issue #123
+		// 通过在exitChan上的选择，可以保证我们不会阻止退出，见问题#123
 		select {
-		case <-n.exitChan:
-		case n.notifyChan <- v:
+		case <-n.exitChan: // 收到优雅结束通知,则结束此协程
+		case n.notifyChan <- v: // 向通知管道发送topic或channel对象检查变动情况确定注册或者注销对应的topic或channel
 			if loading || !persist {
 				return
 			}
@@ -596,7 +594,7 @@ func (n *NSQD) Notify(v interface{}, persist bool) {
 	})
 }
 
-// channels returns a flat slice of all channels in all topics
+// channels 返回所有主题中的所有频道对象的列表。
 func (n *NSQD) channels() []*Channel {
 	var channels []*Channel
 	n.RLock()
@@ -611,9 +609,9 @@ func (n *NSQD) channels() []*Channel {
 	return channels
 }
 
-// resizePool adjusts the size of the pool of queueScanWorker goroutines
+// resizePool调整queueScanWorker goroutines池的大小。
 //
-//	1 <= pool <= min(num * 0.25, QueueScanWorkerPoolMax)
+// 1 <= pool <= min(num * 0.25, QueueScanWorkerPoolMax)
 func (n *NSQD) resizePool(num int, workCh chan *Channel, responseCh chan bool, closeCh chan int) {
 	idealPoolSize := int(float64(num) * 0.25) // 队列扫描时的最大工作线程数量渠道数/4
 	if idealPoolSize < 1 {
@@ -638,8 +636,7 @@ func (n *NSQD) resizePool(num int, workCh chan *Channel, responseCh chan bool, c
 	}
 }
 
-// queueScanWorker receives work (in the form of a channel) from queueScanLoop
-// and processes the deferred and in-flight queues
+// queueScanWorker 从queueScanLoop接收工作（以通道的形式），并处理延迟和飞行中的队列。
 func (n *NSQD) queueScanWorker(workCh chan *Channel, responseCh chan bool, closeCh chan int) {
 	for {
 		select {
@@ -659,62 +656,62 @@ func (n *NSQD) queueScanWorker(workCh chan *Channel, responseCh chan bool, close
 	}
 }
 
-// queueScanLoop runs in a single goroutine to process in-flight and deferred
-// priority queues. It manages a pool of queueScanWorker (configurable max of
-// QueueScanWorkerPoolMax (default: 4)) that process channels concurrently.
+// queueScanLoop 在单个goroutine中运行，以处理消费中和延迟优先级队列。
+// 它管理一个队列ScanWorker池（可配置的最大值为
+// QueueScanWorkerPoolMax（默认值：4））同时处理通道。
 //
-// It copies Redis's probabilistic expiration algorithm: it wakes up every
-// QueueScanInterval (default: 100ms) to select a random QueueScanSelectionCount
-// (default: 20) channels from a locally cached list (refreshed every
-// QueueScanRefreshInterval (default: 5s)).
+// 它复制Redis的概率过期算法：它每隔QueueScanInterval（默认值：100ms）就随机选择
+// QueueScanSelectionCount（默认值：20）个本地缓存列表中的频道加入到处理频道channel方法中检查处理
 //
-// If either of the queues had work to do the channel is considered "dirty".
+// 每隔QueueScanRefreshInterval（默认值：5s）将更新一次频道channel列表。
 //
-// If QueueScanDirtyPercent (default: 25%) of the selected channels were dirty,
-// the loop continues without sleep.
+// 如果任何一个队列都有工作要做，则通道被认为是“脏的”。
+//
+// 如果所选频道的QueueScanDirtyPercent（默认值：25%）为脏通道，则循环随机处理选中的频道列表，直到小于QueueScanDirtyPercent值。
 func (n *NSQD) queueScanLoop() {
-	workCh := make(chan *Channel, n.getOpts().QueueScanSelectionCount)
-	responseCh := make(chan bool, n.getOpts().QueueScanSelectionCount)
-	closeCh := make(chan int)
+	workCh := make(chan *Channel, n.getOpts().QueueScanSelectionCount) // 根据queue-scan-selection-count生成指定大小需要检查处理频道channel的通道
+	responseCh := make(chan bool, n.getOpts().QueueScanSelectionCount) // 根据queue-scan-selection-count生成指定大小需要接受处理频道channel结果的通道
+	closeCh := make(chan int)                                          // 生成关闭通道，根据此通道可以通知到所有处理频道的方法中
 
-	workTicker := time.NewTicker(n.getOpts().QueueScanInterval)
-	refreshTicker := time.NewTicker(n.getOpts().QueueScanRefreshInterval)
+	workTicker := time.NewTicker(n.getOpts().QueueScanInterval)           // 生成轮询检查定时器（固定100毫秒）
+	refreshTicker := time.NewTicker(n.getOpts().QueueScanRefreshInterval) // 生成轮询刷新定时器（固定5秒）
 
-	channels := n.channels()
-	n.resizePool(len(channels), workCh, responseCh, closeCh)
+	channels := n.channels()                                 // 获取nsqd对象下的所有频道channel对象
+	n.resizePool(len(channels), workCh, responseCh, closeCh) // 开启指定大小（1 <= pool <= min(len(channels) * 0.25, QueueScanWorkerPoolMax)）的处理频道channel方法（协程方式启动）
 
 	for {
 		select {
-		case <-workTicker.C:
+		case <-workTicker.C: // 到达轮询检查时间片，检查是否处理的频道channel数是否为0，若为0跳过后续处理逻辑等待下一个触发通道通知
 			if len(channels) == 0 {
 				continue
 			}
-		case <-refreshTicker.C:
+		case <-refreshTicker.C: // 到达刷新时间片，重新获取所有频道channel对象并按新频道数开放需要的处理频道channel方法（协程方式启动）
 			channels = n.channels()
 			n.resizePool(len(channels), workCh, responseCh, closeCh)
 			continue
-		case <-n.exitChan:
+		case <-n.exitChan: // 收到退出信号，走退出流程
 			goto exit
 		}
 
+		// 根据queue-scan-selection-count和频道channel的长度生成最小num（用于随机频道加入到处理频道channel方法中检查处理）
 		num := n.getOpts().QueueScanSelectionCount
 		if num > len(channels) {
 			num = len(channels)
 		}
 
 	loop:
-		for _, i := range util.UniqRands(num, len(channels)) {
-			workCh <- channels[i]
+		for _, i := range util.UniqRands(num, len(channels)) { // 生成num个随机channels的下标数组
+			workCh <- channels[i] // 通过通道放到处理频道channel方法中检查处理
 		}
 
-		numDirty := 0
+		numDirty := 0 // 用于统计此次处理中频道channel列表中需要处理的个数
 		for i := 0; i < num; i++ {
 			if <-responseCh {
 				numDirty++
 			}
 		}
 
-		if float64(numDirty)/float64(num) > n.getOpts().QueueScanDirtyPercent {
+		if float64(numDirty)/float64(num) > n.getOpts().QueueScanDirtyPercent { // 当处理命中率达到QueueScanDirtyPercent（默认0.25）时继续轮询处理
 			goto loop
 		}
 	}
@@ -726,25 +723,26 @@ exit:
 	refreshTicker.Stop()
 }
 
+// buildTLSConfig 构建tls.Config对象
 func buildTLSConfig(opts *Options) (*tls.Config, error) {
 	var tlsConfig *tls.Config
 
-	if opts.TLSCert == "" && opts.TLSKey == "" {
+	if opts.TLSCert == "" && opts.TLSKey == "" { // 没有证书信息时,跳过构建操作
 		return nil, nil
 	}
 
-	tlsClientAuthPolicy := tls.VerifyClientCertIfGiven
+	tlsClientAuthPolicy := tls.VerifyClientCertIfGiven // VerifyClientCertIfGiven 表示在握手过程中应该请求客户证书，但不要求客户发送证书。如果客户端确实发送了证书，则要求它是有效的。
 
-	cert, err := tls.LoadX509KeyPair(opts.TLSCert, opts.TLSKey)
+	cert, err := tls.LoadX509KeyPair(opts.TLSCert, opts.TLSKey) // 生成证书对象
 	if err != nil {
 		return nil, err
 	}
 	switch opts.TLSClientAuthPolicy {
-	case "require":
+	case "require": // RequireAnyClientCert 表示在握手过程中应该请求客户证书，并且要求客户至少发送一份证书，但不要求该证书必须有效。
 		tlsClientAuthPolicy = tls.RequireAnyClientCert
-	case "require-verify":
+	case "require-verify": // RequireAndVerifyClientCert 表示在握手过程中应该请求客户证书，并且要求客户至少发送一份有效的证书。
 		tlsClientAuthPolicy = tls.RequireAndVerifyClientCert
-	default:
+	default: // NoClientCert 表示在握手过程中不应该请求客户证书，如果有任何证书被发送，它们将不会被验证。
 		tlsClientAuthPolicy = tls.NoClientCert
 	}
 
@@ -769,11 +767,12 @@ func buildTLSConfig(opts *Options) (*tls.Config, error) {
 	return tlsConfig, nil
 }
 
+// IsAuthEnabled 是否需要认证
 func (n *NSQD) IsAuthEnabled() bool {
 	return len(n.getOpts().AuthHTTPAddresses) != 0
 }
 
-// Context returns a context that will be canceled when nsqd initiates the shutdown
+// Context返回一个当nsqd启动停止时可以被取消的上下文。
 func (n *NSQD) Context() context.Context {
 	return n.ctx
 }
