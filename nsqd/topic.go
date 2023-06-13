@@ -41,48 +41,49 @@ type Topic struct {
 	nsqd *NSQD
 }
 
-// Topic constructor
+// NewTopic 生成一个topic对象
 func NewTopic(topicName string, nsqd *NSQD, deleteCallback func(*Topic)) *Topic {
 	t := &Topic{
 		name:              topicName,
-		channelMap:        make(map[string]*Channel),
-		memoryMsgChan:     make(chan *Message, nsqd.getOpts().MemQueueSize),
-		startChan:         make(chan int, 1),
-		exitChan:          make(chan int),
-		channelUpdateChan: make(chan int),
-		nsqd:              nsqd,
-		paused:            0,
-		pauseChan:         make(chan int),
-		deleteCallback:    deleteCallback,
-		idFactory:         NewGUIDFactory(nsqd.getOpts().ID),
+		channelMap:        make(map[string]*Channel),                        // 初始化频道channelMap对象
+		memoryMsgChan:     make(chan *Message, nsqd.getOpts().MemQueueSize), // 初始化指定大小的内存消息通道，对应参数mem-queue-size。默认10000
+		startChan:         make(chan int, 1),                                // 初始化启动通道，由方法t.Start()触发通知
+		exitChan:          make(chan int),                                   // 初始化退出通道，由(t *Topic) Delete()和(t *Topic) Close()两个方法触发通知
+		channelUpdateChan: make(chan int),                                   // 初始化频道channel更新通道，当此topic下频道有新增或删除时触发通知
+		nsqd:              nsqd,                                             // 初始化nsqd对象，用于便捷获取对象中的参数和此topic下的消息推送失败等信息同步以及对象中Notify方法的调用
+		paused:            0,                                                // 初始化暂停信号【0:启动，1:暂停】，用于此topic对象是否向下面所有频道channel分发消息
+		pauseChan:         make(chan int),                                   // 初始化暂停通道，当触发暂停或启动时会通知消息泵messagePump更新是否继续分发消息状态
+		deleteCallback:    deleteCallback,                                   // 初始化删除回调方法，此topic若时临时的ephemeral=true，在没有频道channel对象的情况下将调用此方法
+		idFactory:         NewGUIDFactory(nsqd.getOpts().ID),                // 根据nsqd对象的node-id生成一个guid工厂，用于生成消息对象唯一的消息id
 	}
-	if strings.HasSuffix(topicName, "#ephemeral") {
-		t.ephemeral = true
-		t.backend = newDummyBackendQueue()
+	if strings.HasSuffix(topicName, "#ephemeral") { // topic名字包含#ephemeral后缀则视为临时topic对象
+		t.ephemeral = true                 // 标记为临时topic
+		t.backend = newDummyBackendQueue() // 初始化一个虚拟磁盘队列，仅临时topic对象占位使用，无任何作用
 	} else {
 		dqLogf := func(level diskqueue.LogLevel, f string, args ...interface{}) {
 			opts := nsqd.getOpts()
 			lg.Logf(opts.Logger, opts.LogLevel, lg.LogLevel(level), f, args...)
 		}
-		t.backend = diskqueue.New(
+		t.backend = diskqueue.New( // ***重点：初始化磁盘队列对象，此方法中存在磁盘队列的管理逻辑，下面会提出来详解
 			topicName,
-			nsqd.getOpts().DataPath,
-			nsqd.getOpts().MaxBytesPerFile,
-			int32(minValidMsgLength),
-			int32(nsqd.getOpts().MaxMsgSize)+minValidMsgLength,
-			nsqd.getOpts().SyncEvery,
-			nsqd.getOpts().SyncTimeout,
-			dqLogf,
+			nsqd.getOpts().DataPath,        // 磁盘数据存放根路径data-path，没有默认值，若为空则设置当前可执行文件的上级路径为磁盘数据存放根路径
+			nsqd.getOpts().MaxBytesPerFile, // 每个磁盘文件存储的最大容量max-bytes-per-file，默认100MB
+			int32(minValidMsgLength),       // 最小有效消息长度26(16+8+2)
+			int32(nsqd.getOpts().MaxMsgSize)+minValidMsgLength, // 最大有效消息长度1048602(1024*1024+16+8+2)
+			nsqd.getOpts().SyncEvery,                           // 设置磁盘队列的读取操作次数值sync-every，达到此值时异步持久化一次fsync（默认2500次）
+			nsqd.getOpts().SyncTimeout,                         // 设置磁盘队列的轮循时间sync-timeout，达到此值时异步持久化一次fsync（默认为2s）
+			dqLogf,                                             // 磁盘队列日志对象
 		)
 	}
 
-	t.waitGroup.Wrap(t.messagePump)
+	t.waitGroup.Wrap(t.messagePump) // ***重点：异步调用messagePump方法，此方法逻辑相对比较复杂，下面会提出来详解
 
-	t.nsqd.Notify(t, !t.ephemeral)
+	t.nsqd.Notify(t, !t.ephemeral) // 异步调用nsqd.Notify方法将topic对象通过notifyChan通道注册到所有的lookup服务中
 
 	return t
 }
 
+// Start 通过通道通知此topic下的消息泵启动
 func (t *Topic) Start() {
 	select {
 	case t.startChan <- 1:
@@ -245,8 +246,8 @@ func (t *Topic) Depth() int64 {
 	return int64(len(t.memoryMsgChan)) + t.backend.Depth()
 }
 
-// messagePump selects over the in-memory and backend queue and
-// writes messages to every channel for this topic
+// messagePump 在内存和后端队列中进行选择，并为这个主题的每个通道写入消息。
+// 此方法是nsqd的核心方法之一（消息核心管理）
 func (t *Topic) messagePump() {
 	var msg *Message
 	var buf []byte
@@ -255,46 +256,55 @@ func (t *Topic) messagePump() {
 	var memoryMsgChan chan *Message
 	var backendChan <-chan []byte
 
-	// do not pass messages before Start(), but avoid blocking Pause() or GetChannel()
+	// 不要在Start()之前传递消息，但要避免Pause()或GetChannel()方法引起对应通道阻塞
 	for {
 		select {
-		case <-t.channelUpdateChan:
+		case <-t.channelUpdateChan: // 此topic下的频道channel有新增或删除时触发通知，这里避免阻塞
 			continue
-		case <-t.pauseChan:
+		case <-t.pauseChan: // 此topic有暂停或启动操作时触发通知，这里避免阻塞
 			continue
-		case <-t.exitChan:
+		case <-t.exitChan: // 此topic收到退出信号时，直接走退出流程
 			goto exit
-		case <-t.startChan:
+		case <-t.startChan: // 收到topic的启动通知，启动消息泵开始处理数据
 		}
 		break
 	}
 	t.RLock()
-	for _, c := range t.channelMap {
+	for _, c := range t.channelMap { // 读锁下加载此topic下的所有频道channel对象
 		chans = append(chans, c)
 	}
 	t.RUnlock()
-	if len(chans) > 0 && !t.IsPaused() {
+	if len(chans) > 0 && !t.IsPaused() { // 此topic下存在频道且topic是启动状态时更新监听的内存消息通道对象和磁盘数据通道对象
 		memoryMsgChan = t.memoryMsgChan
 		backendChan = t.backend.ReadChan()
 	}
 
-	// main message loop
+	// 消息循环（核心）
 	for {
 		select {
-		case msg = <-memoryMsgChan:
-		case buf = <-backendChan:
-			msg, err = decodeMessage(buf)
+		case msg = <-memoryMsgChan: // 实时接受内存消息通道提供的消息对象
+		case buf = <-backendChan: // 实时接受磁盘数据通道提供的消息数据
+			msg, err = decodeMessage(buf) // 解码消息数据到消息对象中
 			if err != nil {
 				t.nsqd.logf(LOG_ERROR, "failed to decode message - %s", err)
 				continue
 			}
-		case <-t.channelUpdateChan:
-			chans = chans[:0]
+		case <-t.channelUpdateChan: // 此topic下的频道channel有新增或删除通知，这里收到后及时更新频道channel列表
+			chans = chans[:0] // 删除频道列表中的所有频道
 			t.RLock()
-			for _, c := range t.channelMap {
+			for _, c := range t.channelMap { // 读锁下加载此topic下的所有频道channel对象
 				chans = append(chans, c)
 			}
 			t.RUnlock()
+			if len(chans) == 0 || t.IsPaused() { // 此topic下不存在频道或topic是暂停状态时关闭监听的内存消息通道对象和磁盘数据通道对象
+				memoryMsgChan = nil
+				backendChan = nil
+			} else { // 此topic下存在频道且topic是启动状态时更新监听的内存消息通道对象和磁盘数据通道对象
+				memoryMsgChan = t.memoryMsgChan
+				backendChan = t.backend.ReadChan()
+			}
+			continue
+		case <-t.pauseChan: // 收到启动或暂停通知时，检查是否需要关闭或更新监听的内存消息通道对象和磁盘数据通道对象
 			if len(chans) == 0 || t.IsPaused() {
 				memoryMsgChan = nil
 				backendChan = nil
@@ -303,35 +313,24 @@ func (t *Topic) messagePump() {
 				backendChan = t.backend.ReadChan()
 			}
 			continue
-		case <-t.pauseChan:
-			if len(chans) == 0 || t.IsPaused() {
-				memoryMsgChan = nil
-				backendChan = nil
-			} else {
-				memoryMsgChan = t.memoryMsgChan
-				backendChan = t.backend.ReadChan()
-			}
-			continue
-		case <-t.exitChan:
+		case <-t.exitChan: // 此topic收到退出信号时，直接走退出流程
 			goto exit
 		}
 
 		for i, channel := range chans {
 			chanMsg := msg
-			// copy the message because each channel
-			// needs a unique instance but...
-			// fastpath to avoid copy if its the first channel
-			// (the topic already created the first copy)
+			// 复制消息对象，因为每个通道都需要一个唯一的实例
+			// 如果是第一个频道channel（主题已经创建了第一个消息对象），则跳过复制
 			if i > 0 {
-				chanMsg = NewMessage(msg.ID, msg.Body)
+				chanMsg = NewMessage(msg.ID, msg.Body) // 保证每个频道获取的消息对象对应的地址唯一
 				chanMsg.Timestamp = msg.Timestamp
 				chanMsg.deferred = msg.deferred
 			}
-			if chanMsg.deferred != 0 {
-				channel.PutMessageDeferred(chanMsg, chanMsg.deferred)
+			if chanMsg.deferred != 0 { // 如果时延迟消息，则放到延迟队列中
+				channel.PutMessageDeferred(chanMsg, chanMsg.deferred) // 放到延迟队列前会根据延迟时间升序排序，调用container/heap包下的heap.Push方法
 				continue
 			}
-			err := channel.PutMessage(chanMsg)
+			err := channel.PutMessage(chanMsg) // 将消息放到频道channel的实时消息队列中（内存消息通道或磁盘消息队列）
 			if err != nil {
 				t.nsqd.logf(LOG_ERROR,
 					"TOPIC(%s) ERROR: failed to put msg(%s) to channel(%s) - %s",
@@ -344,22 +343,23 @@ exit:
 	t.nsqd.logf(LOG_INFO, "TOPIC(%s): closing ... messagePump", t.name)
 }
 
-// Delete empties the topic and all its channels and closes
+// Delete 清空主题及其所有频道
 func (t *Topic) Delete() error {
 	return t.exit(true)
 }
 
-// Close persists all outstanding topic data and closes all its channels
+// Close 关闭主题及其所有频道
 func (t *Topic) Close() error {
 	return t.exit(false)
 }
 
+// exit topic对象的删除或者关闭(由参数控制)
 func (t *Topic) exit(deleted bool) error {
-	if !atomic.CompareAndSwapInt32(&t.exitFlag, 0, 1) {
+	if !atomic.CompareAndSwapInt32(&t.exitFlag, 0, 1) { // 如果默认值是1则说明此方法被重复调用将直接退出,否则继续执行下面的删除或关闭逻辑
 		return errors.New("exiting")
 	}
 
-	if deleted {
+	if deleted { // 删除的情况将调用通知方法通知lookupLoop协程中注销此topic及所有频道channel
 		t.nsqd.logf(LOG_INFO, "TOPIC(%s): deleting", t.name)
 
 		// since we are explicitly deleting a topic (not just at system exit time)

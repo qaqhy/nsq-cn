@@ -254,9 +254,9 @@ func (n *NSQD) GetStartTime() time.Time {
 }
 
 func (n *NSQD) Main() error {
-	exitCh := make(chan error)
+	exitCh := make(chan error) // 初始化错误通知通道
 	var once sync.Once
-	exitFunc := func(err error) {
+	exitFunc := func(err error) { // 临时错误通知方法，所有的核心服务必须通过此方法包装才能将错误信息通知到错误通道中
 		once.Do(func() {
 			if err != nil {
 				n.logf(LOG_FATAL, "%s", err)
@@ -265,29 +265,29 @@ func (n *NSQD) Main() error {
 		})
 	}
 
-	n.waitGroup.Wrap(func() {
+	n.waitGroup.Wrap(func() { // ***重点：协程方式启动nsqd的TCP服务
 		exitFunc(protocol.TCPServer(n.tcpListener, n.tcpServer, n.logf))
 	})
-	if n.httpListener != nil {
+	if n.httpListener != nil { // 存在HTTP的net.Listener对象时执行下面逻辑
 		httpServer := newHTTPServer(n, false, n.getOpts().TLSRequired == TLSRequired)
-		n.waitGroup.Wrap(func() {
+		n.waitGroup.Wrap(func() { // ***重点：协程方式启动nsqd的HTTP服务
 			exitFunc(http_api.Serve(n.httpListener, httpServer, "HTTP", n.logf))
 		})
 	}
-	if n.httpsListener != nil {
+	if n.httpsListener != nil { // 存在HTTPS的net.Listener对象时执行下面逻辑
 		httpsServer := newHTTPServer(n, true, true)
-		n.waitGroup.Wrap(func() {
+		n.waitGroup.Wrap(func() { // ***重点：协程方式启动nsqd的HTTPS服务，服务内容与http一致
 			exitFunc(http_api.Serve(n.httpsListener, httpsServer, "HTTPS", n.logf))
 		})
 	}
 
-	n.waitGroup.Wrap(n.queueScanLoop)
-	n.waitGroup.Wrap(n.lookupLoop)
-	if n.getOpts().StatsdAddress != "" {
-		n.waitGroup.Wrap(n.statsdLoop)
+	n.waitGroup.Wrap(n.queueScanLoop)    // ***重点：协程方式启动queueScanLoop服务，处理消费中和延迟优先级队列中的消息
+	n.waitGroup.Wrap(n.lookupLoop)       // 协程方式启动lookupLoop服务，用于同步所有的topic和channel到每个服务发现lookup服务中。
+	if n.getOpts().StatsdAddress != "" { // 存在统计服务时执行下面逻辑
+		n.waitGroup.Wrap(n.statsdLoop) // 协程方式启动statsdLoop服务，使用UDP协议周期上传nsqd服务状态信息
 	}
 
-	err := <-exitCh
+	err := <-exitCh // 阻塞等待退出信号，有错误时返回error对象，无错误时返回nil
 	return err
 }
 
@@ -478,10 +478,9 @@ func (n *NSQD) Exit() {
 	n.ctxCancel()
 }
 
-// GetTopic performs a thread safe operation
-// to return a pointer to a Topic object (potentially new)
+// GetTopic 执行一个线程安全操作，返回一个指向主题topic对象的指针（可能是新的）。
 func (n *NSQD) GetTopic(topicName string) *Topic {
-	// most likely we already have this topic, so try read lock first
+	// 很可能我们已经有了这个主题topic，所以请先尝试读取锁定
 	n.RLock()
 	t, ok := n.topicMap[topicName]
 	n.RUnlock()
@@ -489,6 +488,7 @@ func (n *NSQD) GetTopic(topicName string) *Topic {
 		return t
 	}
 
+	// 前面读取锁定未拿到指定主题topic，现在写锁定同样尝试获取（防止并发模式下释放读锁的一瞬间加入了此主题topic）
 	n.Lock()
 
 	t, ok = n.topicMap[topicName]
@@ -496,47 +496,47 @@ func (n *NSQD) GetTopic(topicName string) *Topic {
 		n.Unlock()
 		return t
 	}
+	// 上面绝对的保证了主题topic不存在，同时加入了写锁不可能在操作期间并发创建此主题topic，所以下面进行topic对象的真正创建
 	deleteCallback := func(t *Topic) {
 		n.DeleteExistingTopic(t.name)
 	}
-	t = NewTopic(topicName, n, deleteCallback)
+	t = NewTopic(topicName, n, deleteCallback) // ***重点：此方法下逻辑相对比较复杂，下面会提出来详解
 	n.topicMap[topicName] = t
 
 	n.Unlock()
 
 	n.logf(LOG_INFO, "TOPIC(%s): created", t.name)
-	// topic is created but messagePump not yet started
+	// 主题已创建完成，但消息泵尚未启动，后面会由topic.Start()方法通过通道方式启动消息泵
 
-	// if this topic was created while loading metadata at startup don't do any further initialization
-	// (topic will be "started" after loading completes)
+	// 如果该主题是在启动时加载元数据时创建的，请不要进行任何进一步的初始化（加载完成后将“启动”该主题）；由于加载配置更新了n.isLoading字段为1，所以这里会提前结束
 	if atomic.LoadInt32(&n.isLoading) == 1 {
 		return t
 	}
 
-	// if using lookupd, make a blocking call to get channels and immediately create them
-	// to ensure that all channels receive published messages
+	// 如果使用lookupd，请进行阻塞调用以获取通道并立即创建它们，以确保所有通道都接收到已发布的消息；上面创建新的主题topic对象后需要检查服务发现lookupd中是否已注册对应的topic，若注册则同步对应topic下所有的频道channel
 	lookupdHTTPAddrs := n.lookupdHTTPAddrs()
 	if len(lookupdHTTPAddrs) > 0 {
+		// 遍历所有lookupd服务器获取所有频道channel（去重频道channel列表）
 		channelNames, err := n.ci.GetLookupdTopicChannels(t.name, lookupdHTTPAddrs)
 		if err != nil {
 			n.logf(LOG_WARN, "failed to query nsqlookupd for channels to pre-create for topic %s - %s", t.name, err)
 		}
 		for _, channelName := range channelNames {
-			if strings.HasSuffix(channelName, "#ephemeral") {
-				continue // do not create ephemeral channel with no consumer client
+			if strings.HasSuffix(channelName, "#ephemeral") { // 带有#ephemeral前缀的频道channel是临时频道
+				continue // 不要在没有消费者客户端的情况下创建临时频道
 			}
-			t.GetChannel(channelName)
+			t.GetChannel(channelName) // 获取channel对象，channel不存在则创建同时通知到topic的channelUpdateChan通道中，使topic对应的消息泵messagePump更新需要同步分发消息msg的channel列表
 		}
-	} else if len(n.getOpts().NSQLookupdTCPAddresses) > 0 {
+	} else if len(n.getOpts().NSQLookupdTCPAddresses) > 0 { // 由于lookupdHTTPAddrs列表为空，则检查配置中的NSQLookupdTCPAddresses是否为空，若存在则打印错误日志（没有可用的nsqlookupd服务来查询是否需要为主题topic同步已存在的所有频道channel）
 		n.logf(LOG_ERROR, "no available nsqlookupd to query for channels to pre-create for topic %s", t.name)
 	}
 
-	// now that all channels are added, start topic messagePump
+	// 现在已经添加了所有通道，启动该topic对应的消息泵messagePump
 	t.Start()
 	return t
 }
 
-// GetExistingTopic gets a topic only if it exists
+// GetExistingTopic 只有在一个主题topic存在的情况下才会返回该主题topic对象
 func (n *NSQD) GetExistingTopic(topicName string) (*Topic, error) {
 	n.RLock()
 	defer n.RUnlock()

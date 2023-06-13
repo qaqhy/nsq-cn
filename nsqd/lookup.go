@@ -117,32 +117,32 @@ func (n *NSQD) lookupLoop() {
 					n.logf(LOG_ERROR, "LOOKUPD(%s): %s - %s", lookupPeer, cmd, err)
 				}
 			}
-		case val := <-n.notifyChan:
+		case val := <-n.notifyChan: // 收到topic或channel的变动信号,执行下面的逻辑
 			var cmd *nsq.Command
 			var branch string
 
 			switch val := val.(type) {
 			case *Channel:
-				// notify all nsqlookupds that a new channel exists, or that it's removed
+				// 有一个channel新创建或者被删除
 				branch = "channel"
 				channel := val
-				if channel.Exiting() {
+				if channel.Exiting() { // 此channel已退出则生成注销命令对象
 					cmd = nsq.UnRegister(channel.topicName, channel.name)
 				} else {
 					cmd = nsq.Register(channel.topicName, channel.name)
 				}
 			case *Topic:
-				// notify all nsqlookupds that a new topic exists, or that it's removed
+				// 有一个topic新创建或者被删除
 				branch = "topic"
 				topic := val
-				if topic.Exiting() {
+				if topic.Exiting() { // 此topic已退出则生成注销命令对象
 					cmd = nsq.UnRegister(topic.name, "")
 				} else {
 					cmd = nsq.Register(topic.name, "")
 				}
 			}
 
-			for _, lookupPeer := range lookupPeers {
+			for _, lookupPeer := range lookupPeers { // 通知所有的nsqlookupds服务执行注册或注销命令
 				n.logf(LOG_INFO, "LOOKUPD(%s): %s %s", lookupPeer, branch, cmd)
 				_, err := lookupPeer.Command(cmd)
 				if err != nil {
