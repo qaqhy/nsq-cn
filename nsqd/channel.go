@@ -428,7 +428,7 @@ func (c *Channel) AddClient(clientID int64, client Consumer) error {
 	return nil
 }
 
-// RemoveClient从频道Channel的客户端列表中删除客户端
+// RemoveClient 从频道Channel的客户端列表中删除指定客户端消费者对象信息
 func (c *Channel) RemoveClient(clientID int64) {
 	c.exitMutex.RLock()
 	defer c.exitMutex.RUnlock()
