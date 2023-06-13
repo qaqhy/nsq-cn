@@ -181,14 +181,17 @@ func New(opts *Options) (*NSQD, error) {
 	return n, nil
 }
 
+// getOpts 获取opts对象
 func (n *NSQD) getOpts() *Options {
 	return n.opts.Load().(*Options)
 }
 
+// swapOpts 存储opts对象
 func (n *NSQD) swapOpts(opts *Options) {
 	n.opts.Store(opts)
 }
 
+// triggerOptsNotification 通知lookupLoop协程存在opts对象参数更新
 func (n *NSQD) triggerOptsNotification() {
 	select {
 	case n.optsNotificationChan <- struct{}{}:
@@ -196,6 +199,7 @@ func (n *NSQD) triggerOptsNotification() {
 	}
 }
 
+// RealTCPAddr 获取nsqd真实tcp的net.Addr对象
 func (n *NSQD) RealTCPAddr() net.Addr {
 	if n.tcpListener == nil {
 		return &net.TCPAddr{}
@@ -204,6 +208,7 @@ func (n *NSQD) RealTCPAddr() net.Addr {
 
 }
 
+// RealHTTPAddr 获取nsqd真实http的net.Addr对象
 func (n *NSQD) RealHTTPAddr() net.Addr {
 	if n.httpListener == nil {
 		return &net.TCPAddr{}
@@ -211,6 +216,7 @@ func (n *NSQD) RealHTTPAddr() net.Addr {
 	return n.httpListener.Addr()
 }
 
+// RealHTTPSAddr 获取nsqd真实https的*net.TCPAddr对象
 func (n *NSQD) RealHTTPSAddr() *net.TCPAddr {
 	if n.httpsListener == nil {
 		return &net.TCPAddr{}
@@ -218,19 +224,23 @@ func (n *NSQD) RealHTTPSAddr() *net.TCPAddr {
 	return n.httpsListener.Addr().(*net.TCPAddr)
 }
 
+// SetHealth 设置nsqd错误信息
 func (n *NSQD) SetHealth(err error) {
 	n.errValue.Store(errStore{err: err})
 }
 
+// IsHealthy 判断nsqd服务是否健康
 func (n *NSQD) IsHealthy() bool {
 	return n.GetError() == nil
 }
 
+// GetError 获取nsqd错误信息
 func (n *NSQD) GetError() error {
 	errValue := n.errValue.Load()
 	return errValue.(errStore).err
 }
 
+// GetHealth 获取nsqd心跳状态
 func (n *NSQD) GetHealth() string {
 	err := n.GetError()
 	if err != nil {

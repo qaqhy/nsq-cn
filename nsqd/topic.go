@@ -217,16 +217,17 @@ func (t *Topic) PutMessages(msgs []*Message) error {
 	return nil
 }
 
+// put 将消息对象推送到topic下的队列中(内存管道或磁盘队列)
 func (t *Topic) put(m *Message) error {
-	// If mem-queue-size == 0, avoid memory chan, for more consistent ordering,
-	// but try to use memory chan for deferred messages (they lose deferred timer
-	// in backend queue) or if topic is ephemeral (there is no backend queue).
+	// 如果mem-queue-size == 0则跳过下面逻辑，避免使用内存通道，以获得更一致的排序,
+	// 但尽量使用内存通道来处理延迟消息（因为它们在后端磁盘队列中会失去延迟时间）或
+	// 如果topic是短暂的（没有后端队列）将执行下面的逻辑。
 	if cap(t.memoryMsgChan) > 0 || t.ephemeral || m.deferred != 0 {
 		select {
 		case t.memoryMsgChan <- m:
 			return nil
 		default:
-			break // write to backend
+			break // 写入到磁盘队列中
 		}
 	}
 	err := writeMessageToBackend(m, t.backend)
