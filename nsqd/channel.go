@@ -179,10 +179,9 @@ func (c *Channel) exit(deleted bool) error {
 	}
 	c.RUnlock()
 
-	if deleted {
-		// empty the queue (deletes the backend files, too)
-		c.Empty()
-		return c.backend.Delete()
+	if deleted { // 删除频道的情况下,清空内存通道队列并删除磁盘队列文件
+		c.Empty()                 // 此方法包含清空内存通道队列并删除磁盘队列文件的操作
+		return c.backend.Delete() // 此方法仅关闭读文件流和写文件流
 	}
 
 	// 将剩余的所有消息写入到磁盘

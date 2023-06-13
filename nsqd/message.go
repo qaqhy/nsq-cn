@@ -8,8 +8,8 @@ import (
 )
 
 const (
-	MsgIDLength       = 16
-	minValidMsgLength = MsgIDLength + 8 + 2 // Timestamp + Attempts
+	MsgIDLength       = 16                  // 消息ID的长度
+	minValidMsgLength = MsgIDLength + 8 + 2 // Timestamp + Attempts 最小有效的消息内容长度
 )
 
 type MessageID [MsgIDLength]byte
@@ -30,6 +30,7 @@ type Message struct {
 	deferred time.Duration // 消息的延迟发送时间
 }
 
+// NewMessage 生成消息对象
 func NewMessage(id MessageID, body []byte) *Message {
 	return &Message{
 		ID:        id,
@@ -38,6 +39,7 @@ func NewMessage(id MessageID, body []byte) *Message {
 	}
 }
 
+// WriteTo 将消息数据写入到w流中
 func (m *Message) WriteTo(w io.Writer) (int64, error) {
 	var buf [10]byte
 	var total int64
@@ -45,19 +47,19 @@ func (m *Message) WriteTo(w io.Writer) (int64, error) {
 	binary.BigEndian.PutUint64(buf[:8], uint64(m.Timestamp))
 	binary.BigEndian.PutUint16(buf[8:10], uint16(m.Attempts))
 
-	n, err := w.Write(buf[:])
+	n, err := w.Write(buf[:]) // 前8字节写入时间戳信息
 	total += int64(n)
 	if err != nil {
 		return total, err
 	}
 
-	n, err = w.Write(m.ID[:])
+	n, err = w.Write(m.ID[:]) // 8-10字节写入重试次数信息
 	total += int64(n)
 	if err != nil {
 		return total, err
 	}
 
-	n, err = w.Write(m.Body)
+	n, err = w.Write(m.Body) // 10字节后写入消息体信息
 	total += int64(n)
 	if err != nil {
 		return total, err
@@ -91,12 +93,13 @@ func decodeMessage(b []byte) (*Message, error) {
 	return &msg, nil
 }
 
+// writeMessageToBackend 将消息对象写到磁盘队列中
 func writeMessageToBackend(msg *Message, bq BackendQueue) error {
-	buf := bufferPoolGet()
-	defer bufferPoolPut(buf)
-	_, err := msg.WriteTo(buf)
+	buf := bufferPoolGet()     // 获取缓冲区对象
+	defer bufferPoolPut(buf)   // 结束时暂存缓冲区对象
+	_, err := msg.WriteTo(buf) // 将数据写入到缓冲区对象中
 	if err != nil {
 		return err
 	}
-	return bq.Put(buf.Bytes())
+	return bq.Put(buf.Bytes()) // 将缓冲区对象转化成数据发送到磁盘队列中
 }
