@@ -31,11 +31,13 @@ type protocolV2 struct {
 	nsqd *NSQD
 }
 
+// NewClient 生成V2协议处理客户端
 func (p *protocolV2) NewClient(conn net.Conn) protocol.Client {
 	clientID := atomic.AddInt64(&p.nsqd.clientIDSequence, 1)
 	return newClientV2(clientID, conn, p.nsqd)
 }
 
+// IOLoop nsqd TCP处理的核心逻辑
 func (p *protocolV2) IOLoop(c protocol.Client) error {
 	var err error
 	var line []byte
@@ -43,14 +45,11 @@ func (p *protocolV2) IOLoop(c protocol.Client) error {
 
 	client := c.(*clientV2)
 
-	// synchronize the startup of messagePump in order
-	// to guarantee that it gets a chance to initialize
-	// goroutine local state derived from client attributes
-	// and avoid a potential race with IDENTIFY (where a client
-	// could have changed or disabled said attributes)
+	// 同步启动messagePump，以保证它有机会初始化源自客户端属性的goroutine本地状态，
+	// 并避免与IDENTIFY的潜在竞赛（客户端可能已经改变或禁用上述属性）。
 	messagePumpStartedChan := make(chan bool)
-	go p.messagePump(client, messagePumpStartedChan)
-	<-messagePumpStartedChan
+	go p.messagePump(client, messagePumpStartedChan) // 协程方式启动tcp消息泵方法
+	<-messagePumpStartedChan                         // 等待消息泵的启动完成通知
 
 	for {
 		if client.HeartbeatInterval > 0 {
@@ -127,12 +126,12 @@ func (p *protocolV2) SendMessage(client *clientV2, msg *Message) error {
 	buf := bufferPoolGet()
 	defer bufferPoolPut(buf)
 
-	_, err := msg.WriteTo(buf)
+	_, err := msg.WriteTo(buf) // 将msg对象写入到buf对象中
 	if err != nil {
 		return err
 	}
 
-	err = p.Send(client, frameTypeMessage, buf.Bytes())
+	err = p.Send(client, frameTypeMessage, buf.Bytes()) // 发送数据到客户端流中
 	if err != nil {
 		return err
 	}
@@ -200,43 +199,40 @@ func (p *protocolV2) Exec(client *clientV2, params [][]byte) ([]byte, error) {
 	return nil, protocol.NewFatalClientErr(nil, "E_INVALID", fmt.Sprintf("invalid command %s", params[0]))
 }
 
+// messagePump 客户端连接对象订阅指定topic下的channel后,此方法会周期性的管理是否需要将消息发送到此客户端流中
 func (p *protocolV2) messagePump(client *clientV2, startedChan chan bool) {
 	var err error
 	var memoryMsgChan chan *Message
-	var backendMsgChan <-chan []byte
+	var backendMsgChan <-chan []byte // 仅可读权限的通道
 	var subChannel *Channel
-	// NOTE: `flusherChan` is used to bound message latency for
-	// the pathological case of a channel on a low volume topic
-	// with >1 clients having >1 RDY counts
-	var flusherChan <-chan time.Time
+	// flusherChan 是定期刷新客户端流信息的可读通道
+	var flusherChan <-chan time.Time // 仅可读权限的通道
 	var sampleRate int32
 
-	subEventChan := client.SubEventChan
-	identifyEventChan := client.IdentifyEventChan
-	outputBufferTicker := time.NewTicker(client.OutputBufferTimeout)
-	heartbeatTicker := time.NewTicker(client.HeartbeatInterval)
-	heartbeatChan := heartbeatTicker.C
-	msgTimeout := client.MsgTimeout
+	subEventChan := client.SubEventChan                              // 将子事件频道对应的通道对象赋值给subEventChan对象
+	identifyEventChan := client.IdentifyEventChan                    // 将鉴权事件通道对象赋值给identifyEventChan对象
+	outputBufferTicker := time.NewTicker(client.OutputBufferTimeout) // 根据输出刷新频率生成定时器(默认频率250毫秒)
+	heartbeatTicker := time.NewTicker(client.HeartbeatInterval)      // 根据心跳检测频率生成定时器(默认频率客户端连接超时频率60秒/2)
+	heartbeatChan := heartbeatTicker.C                               // 赋值心跳定时器的可读通道给heartbeatChan对象
+	msgTimeout := client.MsgTimeout                                  // 消息被客户端读取后等待的最长时间，过了此时间则自动重新入队，默认1分钟
 
-	// v2 opportunistically buffers data to clients to reduce write system calls
-	// we force flush in two cases:
-	//    1. when the client is not ready to receive messages
-	//    2. we're buffered and the channel has nothing left to send us
-	//       (ie. we would block in this loop anyway)
+	// v2会周期性地将数据缓冲给客户端，以减少写系统的调用。
+	// 我们在两种情况下强制冲刷：
+	// 1.当客户端没有准备好接收信息时
+	// 2.我们被缓冲了，通道没有什么东西可以发给我们了（也就是说，无论如何我们都会在这个循环中阻塞）。
 	//
 	flushed := true
 
-	// signal to the goroutine that started the messagePump
-	// that we've started up
+	// 向启动messagePump的goroutine发出信号，表示我们已经启动了
 	close(startedChan)
 
 	for {
 		if subChannel == nil || !client.IsReadyForMessages() {
-			// the client is not ready to receive messages...
+			// 客户端未开启订阅或订阅的通道暂停分发任务时将执行下面的逻辑
 			memoryMsgChan = nil
 			backendMsgChan = nil
 			flusherChan = nil
-			// force flush
+			// 强制客户端连接的刷新
 			client.writeLock.Lock()
 			err = client.Flush()
 			client.writeLock.Unlock()
@@ -245,14 +241,12 @@ func (p *protocolV2) messagePump(client *clientV2, startedChan chan bool) {
 			}
 			flushed = true
 		} else if flushed {
-			// last iteration we flushed...
-			// do not select on the flusher ticker channel
+			// 刷新状态下,重新更新内存通道对象和磁盘队列对象
 			memoryMsgChan = subChannel.memoryMsgChan
 			backendMsgChan = subChannel.backend.ReadChan()
 			flusherChan = nil
 		} else {
-			// we're buffered (if there isn't any more data we should flush)...
-			// select on the flusher ticker channel, too
+			// 客户端已经准备号且非刷新的情况下,重新更新内存通道对象和磁盘队列对象并设置定期刷新客户端流的通道对象
 			memoryMsgChan = subChannel.memoryMsgChan
 			backendMsgChan = subChannel.backend.ReadChan()
 			flusherChan = outputBufferTicker.C
@@ -260,74 +254,73 @@ func (p *protocolV2) messagePump(client *clientV2, startedChan chan bool) {
 
 		select {
 		case <-flusherChan:
-			// if this case wins, we're either starved
-			// or we won the race between other channels...
-			// in either case, force flush
+			// 收到刷新通知
 			client.writeLock.Lock()
 			err = client.Flush()
 			client.writeLock.Unlock()
-			if err != nil {
+			if err != nil { // 刷新数据异常走退出流程
 				goto exit
 			}
 			flushed = true
-		case <-client.ReadyStateChan: // 接收到频道的开启或关闭通知
-		case subChannel = <-subEventChan:
-			// you can't SUB anymore
+		case <-client.ReadyStateChan: // 接收到频道channel的开启或关闭通知,重新跳转到上面的逻辑中检查通道是否暂停分发任务
+		case subChannel = <-subEventChan: // 获取订阅topic下的channel对象
+			// 订阅成功后不再重新获取订阅的channel对象
 			subEventChan = nil
-		case identifyData := <-identifyEventChan:
-			// you can't IDENTIFY anymore
+		case identifyData := <-identifyEventChan: // 获取客户端连接的鉴权数据
+			// 鉴权数据获得后不再重新获取鉴权数据信息
 			identifyEventChan = nil
 
-			outputBufferTicker.Stop()
-			if identifyData.OutputBufferTimeout > 0 {
+			outputBufferTicker.Stop()                 // 关闭默认的输出流定时器
+			if identifyData.OutputBufferTimeout > 0 { // 如果鉴权数据中设置了输出刷新频率则重新生成输出流定时器
 				outputBufferTicker = time.NewTicker(identifyData.OutputBufferTimeout)
 			}
 
-			heartbeatTicker.Stop()
-			heartbeatChan = nil
-			if identifyData.HeartbeatInterval > 0 {
+			heartbeatTicker.Stop()                  // 关闭默认的心跳定时器
+			heartbeatChan = nil                     // 清空心跳可读通道对象
+			if identifyData.HeartbeatInterval > 0 { // 如果鉴权数据中设置了心跳监测频率则重新生成心跳定时器和心跳可读通道对象
 				heartbeatTicker = time.NewTicker(identifyData.HeartbeatInterval)
 				heartbeatChan = heartbeatTicker.C
 			}
 
-			if identifyData.SampleRate > 0 {
+			if identifyData.SampleRate > 0 { // 如果鉴权数据中设置了采样率则更新采样率
 				sampleRate = identifyData.SampleRate
 			}
 
-			msgTimeout = identifyData.MsgTimeout
-		case <-heartbeatChan:
-			err = p.Send(client, frameTypeResponse, heartbeatBytes)
+			msgTimeout = identifyData.MsgTimeout // 设置此客户端连接的消息消费最长时间
+		case <-heartbeatChan: // 到达心跳通知时间
+			err = p.Send(client, frameTypeResponse, heartbeatBytes) // 发送心跳通知到客户端上
 			if err != nil {
 				goto exit
 			}
-		case b := <-backendMsgChan:
+		case b := <-backendMsgChan: // 磁盘队列中获取到数据
+			// 采样率存在且随机值在采样率范围内则仅处理随机的这部分数据，若为0则处理读取的所有数据
 			if sampleRate > 0 && rand.Int31n(100) > sampleRate {
 				continue
 			}
 
-			msg, err := decodeMessage(b)
+			msg, err := decodeMessage(b) // 解析出消息对象
 			if err != nil {
 				p.nsqd.logf(LOG_ERROR, "failed to decode message - %s", err)
 				continue
 			}
-			msg.Attempts++
+			msg.Attempts++ // 消息对象发送到消费队列中前需要设置此消息超时时间并增加一次分发次数
 
-			subChannel.StartInFlightTimeout(msg, client.ID, msgTimeout)
-			client.SendingMessage()
-			err = p.SendMessage(client, msg)
+			subChannel.StartInFlightTimeout(msg, client.ID, msgTimeout) // 设置消费截至时间
+			client.SendingMessage()                                     // 更新消费队列中的计数和总消费量计数
+			err = p.SendMessage(client, msg)                            // 发送消息对象到client的写入流中
 			if err != nil {
 				goto exit
 			}
 			flushed = false
-		case msg := <-memoryMsgChan:
+		case msg := <-memoryMsgChan: // 内存通道中获取到数据
 			if sampleRate > 0 && rand.Int31n(100) > sampleRate {
 				continue
 			}
-			msg.Attempts++
+			msg.Attempts++ // 消息对象发送到消费队列中前需要设置此消息超时时间并增加一次分发次数
 
-			subChannel.StartInFlightTimeout(msg, client.ID, msgTimeout)
-			client.SendingMessage()
-			err = p.SendMessage(client, msg)
+			subChannel.StartInFlightTimeout(msg, client.ID, msgTimeout) // 设置消费截至时间
+			client.SendingMessage()                                     // 更新消费队列中的计数和总消费量计数
+			err = p.SendMessage(client, msg)                            // 发送消息对象到client的写入流中
 			if err != nil {
 				goto exit
 			}
@@ -339,42 +332,43 @@ func (p *protocolV2) messagePump(client *clientV2, startedChan chan bool) {
 
 exit:
 	p.nsqd.logf(LOG_INFO, "PROTOCOL(V2): [%s] exiting messagePump", client)
-	heartbeatTicker.Stop()
-	outputBufferTicker.Stop()
+	heartbeatTicker.Stop()    // 关闭心跳定时器
+	outputBufferTicker.Stop() // 关闭输出流定时器
 	if err != nil {
 		p.nsqd.logf(LOG_ERROR, "PROTOCOL(V2): [%s] messagePump error - %s", client, err)
 	}
 }
 
+// IDENTIFY 此命令是客户端和nsqd之间建立连接后必须发送的第一个命令，只有成功鉴权才能执行后续的操作
 func (p *protocolV2) IDENTIFY(client *clientV2, params [][]byte) ([]byte, error) {
 	var err error
 
-	if atomic.LoadInt32(&client.State) != stateInit {
+	if atomic.LoadInt32(&client.State) != stateInit { // 客户端状态不是初始状态则返回错误信息
 		return nil, protocol.NewFatalClientErr(nil, "E_INVALID", "cannot IDENTIFY in current state")
 	}
 
-	bodyLen, err := readLen(client.Reader, client.lenSlice)
+	bodyLen, err := readLen(client.Reader, client.lenSlice) // 从读取流client.Reader中的前4字节解析并获取内容长度
 	if err != nil {
 		return nil, protocol.NewFatalClientErr(err, "E_BAD_BODY", "IDENTIFY failed to read body size")
 	}
 
-	if int64(bodyLen) > p.nsqd.getOpts().MaxBodySize {
+	if int64(bodyLen) > p.nsqd.getOpts().MaxBodySize { // 数据内容长度大于接收消息的最大长度(默认5MB)则返回错误信息
 		return nil, protocol.NewFatalClientErr(nil, "E_BAD_BODY",
 			fmt.Sprintf("IDENTIFY body too big %d > %d", bodyLen, p.nsqd.getOpts().MaxBodySize))
 	}
 
-	if bodyLen <= 0 {
+	if bodyLen <= 0 { // 没有数据内容则返回错误信息
 		return nil, protocol.NewFatalClientErr(nil, "E_BAD_BODY",
 			fmt.Sprintf("IDENTIFY invalid body size %d", bodyLen))
 	}
 
-	body := make([]byte, bodyLen)
-	_, err = io.ReadFull(client.Reader, body)
+	body := make([]byte, bodyLen)             // 初始化内容长度大小的body对象用于接收读取流中的内容
+	_, err = io.ReadFull(client.Reader, body) // 从读取流client.Reader中获取数据到body中
 	if err != nil {
 		return nil, protocol.NewFatalClientErr(err, "E_BAD_BODY", "IDENTIFY failed to read body")
 	}
 
-	// body is a json structure with producer information
+	// body是客户端连接用来设置生产者信息的json数据
 	var identifyData identifyDataV2
 	err = json.Unmarshal(body, &identifyData)
 	if err != nil {
@@ -388,23 +382,23 @@ func (p *protocolV2) IDENTIFY(client *clientV2, params [][]byte) ([]byte, error)
 		return nil, protocol.NewFatalClientErr(err, "E_BAD_BODY", "IDENTIFY "+err.Error())
 	}
 
-	// bail out early if we're not negotiating features
+	// 鉴权成功后判断客户端是否需要协商功能，如果不协商就提前退出
 	if !identifyData.FeatureNegotiation {
 		return okBytes, nil
 	}
 
-	tlsv1 := p.nsqd.tlsConfig != nil && identifyData.TLSv1
-	deflate := p.nsqd.getOpts().DeflateEnabled && identifyData.Deflate
-	deflateLevel := 6
-	if deflate && identifyData.DeflateLevel > 0 {
+	tlsv1 := p.nsqd.tlsConfig != nil && identifyData.TLSv1             // 判断是否使用了tls的v1版本
+	deflate := p.nsqd.getOpts().DeflateEnabled && identifyData.Deflate // 是否启用客户端Deflate的压缩算法
+	deflateLevel := 6                                                  // 默认压缩等级为6
+	if deflate && identifyData.DeflateLevel > 0 {                      // 存在压缩等级设置时,使用客户端设置压缩等级
 		deflateLevel = identifyData.DeflateLevel
 	}
-	if max := p.nsqd.getOpts().MaxDeflateLevel; max < deflateLevel {
+	if max := p.nsqd.getOpts().MaxDeflateLevel; max < deflateLevel { // 压缩等级取值范围控制在服务端支持的最大压缩等级范围内
 		deflateLevel = max
 	}
-	snappy := p.nsqd.getOpts().SnappyEnabled && identifyData.Snappy
+	snappy := p.nsqd.getOpts().SnappyEnabled && identifyData.Snappy // 是否启用客户端Snappy的压缩算法
 
-	if deflate && snappy {
+	if deflate && snappy { // 如果客户端同时设置了两种压缩方式则返回错误信息,不能同时启用
 		return nil, protocol.NewFatalClientErr(nil, "E_IDENTIFY_FAILED", "cannot enable both deflate and snappy compression")
 	}
 
@@ -436,17 +430,17 @@ func (p *protocolV2) IDENTIFY(client *clientV2, params [][]byte) ([]byte, error)
 		AuthRequired:        p.nsqd.IsAuthEnabled(),
 		OutputBufferSize:    client.OutputBufferSize,
 		OutputBufferTimeout: int64(client.OutputBufferTimeout / time.Millisecond),
-	})
+	}) // 返回nsqd服务端的配置信息
 	if err != nil {
 		return nil, protocol.NewFatalClientErr(err, "E_IDENTIFY_FAILED", "IDENTIFY failed "+err.Error())
 	}
 
-	err = p.Send(client, frameTypeResponse, resp)
+	err = p.Send(client, frameTypeResponse, resp) // 将数据写入到写入流中
 	if err != nil {
 		return nil, protocol.NewFatalClientErr(err, "E_IDENTIFY_FAILED", "IDENTIFY failed "+err.Error())
 	}
 
-	if tlsv1 {
+	if tlsv1 { // 客户端如果启用了tls协议则执行下面逻辑
 		p.nsqd.logf(LOG_INFO, "PROTOCOL(V2): [%s] upgrading connection to TLS", client)
 		err = client.UpgradeTLS()
 		if err != nil {
@@ -559,20 +553,19 @@ func (p *protocolV2) AUTH(client *clientV2, params [][]byte) ([]byte, error) {
 }
 
 func (p *protocolV2) CheckAuth(client *clientV2, cmd, topicName, channelName string) error {
-	// if auth is enabled, the client must have authorized already
-	// compare topic/channel against cached authorization data (refetching if expired)
+	// 如果授权被启用，客户端必须已经授权，对照缓存的授权数据比较topic/channel（如果过期，则重新获取）。
 	if client.nsqd.IsAuthEnabled() {
-		if !client.HasAuthorizations() {
+		if !client.HasAuthorizations() { // 如果没有授权则返回错误信息
 			return protocol.NewFatalClientErr(nil, "E_AUTH_FIRST",
 				fmt.Sprintf("AUTH required before %s", cmd))
 		}
-		ok, err := client.IsAuthorized(topicName, channelName)
+		ok, err := client.IsAuthorized(topicName, channelName) // 重新授权topic和channel
 		if err != nil {
-			// we don't want to leak errors contacting the auth server to untrusted clients
+			// 客户端和服务端授权异常将返回错误信息
 			p.nsqd.logf(LOG_WARN, "PROTOCOL(V2): [%s] AUTH failed %s", client, err)
 			return protocol.NewFatalClientErr(nil, "E_AUTH_FAILED", "AUTH failed")
 		}
-		if !ok {
+		if !ok { // 返回无权限的信息
 			return protocol.NewFatalClientErr(nil, "E_UNAUTHORIZED",
 				fmt.Sprintf("AUTH failed for %s on %q %q", cmd, topicName, channelName))
 		}
@@ -580,49 +573,49 @@ func (p *protocolV2) CheckAuth(client *clientV2, cmd, topicName, channelName str
 	return nil
 }
 
+// SUB 消费者订阅指定topic并创建channel对象
 func (p *protocolV2) SUB(client *clientV2, params [][]byte) ([]byte, error) {
-	if atomic.LoadInt32(&client.State) != stateInit {
+	if atomic.LoadInt32(&client.State) != stateInit { // 客户端连接的状态如果是初始化状态则返回错误信息
 		return nil, protocol.NewFatalClientErr(nil, "E_INVALID", "cannot SUB in current state")
 	}
 
-	if client.HeartbeatInterval <= 0 {
+	if client.HeartbeatInterval <= 0 { // 客户端连接未设置心跳间隔时间则返回错误信息
 		return nil, protocol.NewFatalClientErr(nil, "E_INVALID", "cannot SUB with heartbeats disabled")
 	}
 
-	if len(params) < 3 {
+	if len(params) < 3 { // 客户端连接缺少参数
 		return nil, protocol.NewFatalClientErr(nil, "E_INVALID", "SUB insufficient number of parameters")
 	}
 
 	topicName := string(params[1])
-	if !protocol.IsValidTopicName(topicName) {
+	if !protocol.IsValidTopicName(topicName) { // 订阅的topic名称是无效的将返回错误信息
 		return nil, protocol.NewFatalClientErr(nil, "E_BAD_TOPIC",
 			fmt.Sprintf("SUB topic name %q is not valid", topicName))
 	}
 
 	channelName := string(params[2])
-	if !protocol.IsValidChannelName(channelName) {
+	if !protocol.IsValidChannelName(channelName) { // 订阅的channel名称是无效的将返回错误信息
 		return nil, protocol.NewFatalClientErr(nil, "E_BAD_CHANNEL",
 			fmt.Sprintf("SUB channel name %q is not valid", channelName))
 	}
 
-	if err := p.CheckAuth(client, "SUB", topicName, channelName); err != nil {
+	if err := p.CheckAuth(client, "SUB", topicName, channelName); err != nil { // 判断是否需要授权,如果需要授权则检验权限是否正常,若权限过期则检验是否可以再次获取授权
 		return nil, err
 	}
 
-	// This retry-loop is a work-around for a race condition, where the
-	// last client can leave the channel between GetChannel() and AddClient().
-	// Avoid adding a client to an ephemeral channel / topic which has started exiting.
+	// 此重试循环是针对竞争条件的解决方案，其中最后一个客户端可以离开GetChannel()和AddClient()之间的通道。避免将客户端添加到已开始退出的临时频道/主题中。
 	var channel *Channel
 	for i := 1; ; i++ {
-		topic := p.nsqd.GetTopic(topicName)
-		channel = topic.GetChannel(channelName)
-		if err := channel.AddClient(client.ID, client); err != nil {
+		topic := p.nsqd.GetTopic(topicName)                          // 获取指定topic对象(不存在则创建)
+		channel = topic.GetChannel(channelName)                      // 获取指定此topic下的channel对象(不存在则创建)
+		if err := channel.AddClient(client.ID, client); err != nil { // 将此客户端连接对象添加到频道channel的客户端列表中
 			return nil, protocol.NewFatalClientErr(err, "E_SUB_FAILED", "SUB failed "+err.Error())
 		}
 
+		// 如果订阅的channel和topic是临时的并且是退出的则将此客户端连接对象从频道channel的客户端列表中移除,并重试两次
 		if (channel.ephemeral && channel.Exiting()) || (topic.ephemeral && topic.Exiting()) {
 			channel.RemoveClient(client.ID)
-			if i < 2 {
+			if i < 2 { // 订阅临时的频道channel可以重试2次；每次间隔100毫秒
 				time.Sleep(100 * time.Millisecond)
 				continue
 			}
@@ -630,9 +623,9 @@ func (p *protocolV2) SUB(client *clientV2, params [][]byte) ([]byte, error) {
 		}
 		break
 	}
-	atomic.StoreInt32(&client.State, stateSubscribed)
+	atomic.StoreInt32(&client.State, stateSubscribed) // 订阅成功后修改此客户端连接状态为订阅状态
 	client.Channel = channel
-	// update message pump
+	// 更新消息泵,此客户端连接对象开始接收消息流
 	client.SubEventChan <- channel
 
 	return okBytes, nil

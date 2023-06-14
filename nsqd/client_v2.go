@@ -237,6 +237,7 @@ func (c *clientV2) Type() int {
 	return typeConsumer
 }
 
+// Identify 设置客户端鉴权数据
 func (c *clientV2) Identify(data identifyDataV2) error {
 	c.nsqd.logf(LOG_INFO, "[%s] IDENTIFY: %+v", c, data)
 
@@ -246,26 +247,31 @@ func (c *clientV2) Identify(data identifyDataV2) error {
 	c.UserAgent = data.UserAgent
 	c.metaLock.Unlock()
 
+	// 更新设置合法的心跳间隔时间
 	err := c.SetHeartbeatInterval(data.HeartbeatInterval)
 	if err != nil {
 		return err
 	}
 
+	// 更新设置合法的输出流缓冲区大小和输出流间隔时间
 	err = c.SetOutputBuffer(data.OutputBufferSize, data.OutputBufferTimeout)
 	if err != nil {
 		return err
 	}
 
+	// 更新设置采样率,范围[0,99]
 	err = c.SetSampleRate(data.SampleRate)
 	if err != nil {
 		return err
 	}
 
+	// 更新设置消息消费的最长时间
 	err = c.SetMsgTimeout(data.MsgTimeout)
 	if err != nil {
 		return err
 	}
 
+	// 根据上面传入的鉴权信息生成鉴权数据对象
 	ie := identifyEvent{
 		OutputBufferTimeout: c.OutputBufferTimeout,
 		HeartbeatInterval:   c.HeartbeatInterval,
@@ -273,7 +279,7 @@ func (c *clientV2) Identify(data identifyDataV2) error {
 		MsgTimeout:          c.MsgTimeout,
 	}
 
-	// update the client's message pump
+	// 更新客户端连接对象的信息泵,如果已更新过将不再更新,需等待此客户端连接重新建立才能刷新
 	select {
 	case c.IdentifyEventChan <- ie:
 	default:
@@ -476,6 +482,7 @@ func (c *clientV2) UnPause() {
 	c.tryUpdateReadyState()
 }
 
+// SetHeartbeatInterval 更新设置合法的心跳间隔时间
 func (c *clientV2) SetHeartbeatInterval(desiredInterval int) error {
 	c.writeLock.Lock()
 	defer c.writeLock.Unlock()
@@ -495,6 +502,7 @@ func (c *clientV2) SetHeartbeatInterval(desiredInterval int) error {
 	return nil
 }
 
+// SetOutputBuffer 更新设置合法的输出流缓冲区大小和输出流间隔时间
 func (c *clientV2) SetOutputBuffer(desiredSize int, desiredTimeout int) error {
 	c.writeLock.Lock()
 	defer c.writeLock.Unlock()
@@ -503,9 +511,8 @@ func (c *clientV2) SetOutputBuffer(desiredSize int, desiredTimeout int) error {
 	case desiredTimeout == -1:
 		c.OutputBufferTimeout = 0
 	case desiredTimeout == 0:
-		// do nothing (use default)
-	case true &&
-		desiredTimeout >= int(c.nsqd.getOpts().MinOutputBufferTimeout/time.Millisecond) &&
+		// 不执行任何操作（使用默认值）
+	case desiredTimeout >= int(c.nsqd.getOpts().MinOutputBufferTimeout/time.Millisecond) &&
 		desiredTimeout <= int(c.nsqd.getOpts().MaxOutputBufferTimeout/time.Millisecond):
 
 		c.OutputBufferTimeout = time.Duration(desiredTimeout) * time.Millisecond
@@ -515,18 +522,18 @@ func (c *clientV2) SetOutputBuffer(desiredSize int, desiredTimeout int) error {
 
 	switch {
 	case desiredSize == -1:
-		// effectively no buffer (every write will go directly to the wrapped net.Conn)
+		// 实际上没有缓冲区（每次写入都将直接进入封装的net.Conn）
 		c.OutputBufferSize = 1
 		c.OutputBufferTimeout = 0
 	case desiredSize == 0:
-		// do nothing (use default)
+		// 不执行任何操作（使用默认值）
 	case desiredSize >= 64 && desiredSize <= int(c.nsqd.getOpts().MaxOutputBufferSize):
 		c.OutputBufferSize = desiredSize
 	default:
 		return fmt.Errorf("output buffer size (%d) is invalid", desiredSize)
 	}
 
-	if desiredSize != 0 {
+	if desiredSize != 0 { // 确认修改了缓冲区大小后需要刷新一下写入流对象并生成一个新的写入流对象
 		err := c.Writer.Flush()
 		if err != nil {
 			return err
@@ -537,6 +544,7 @@ func (c *clientV2) SetOutputBuffer(desiredSize int, desiredTimeout int) error {
 	return nil
 }
 
+// SetSampleRate 更新设置采样率,范围[0,99]
 func (c *clientV2) SetSampleRate(sampleRate int32) error {
 	if sampleRate < 0 || sampleRate > 99 {
 		return fmt.Errorf("sample rate (%d) is invalid", sampleRate)
@@ -545,13 +553,14 @@ func (c *clientV2) SetSampleRate(sampleRate int32) error {
 	return nil
 }
 
+// SetMsgTimeout 更新设置消息消费的最长时间
 func (c *clientV2) SetMsgTimeout(msgTimeout int) error {
 	c.writeLock.Lock()
 	defer c.writeLock.Unlock()
 
 	switch {
 	case msgTimeout == 0:
-		// do nothing (use default)
+		// 不执行任何操作（使用默认值）
 	case msgTimeout >= 1000 &&
 		msgTimeout <= int(c.nsqd.getOpts().MaxMsgTimeout/time.Millisecond):
 		c.MsgTimeout = time.Duration(msgTimeout) * time.Millisecond
@@ -562,6 +571,7 @@ func (c *clientV2) SetMsgTimeout(msgTimeout int) error {
 	return nil
 }
 
+// UpgradeTLS 升级TLS协议并更新客户端连接对象的读取流和写入流对象
 func (c *clientV2) UpgradeTLS() error {
 	c.writeLock.Lock()
 	defer c.writeLock.Unlock()
@@ -574,14 +584,15 @@ func (c *clientV2) UpgradeTLS() error {
 	}
 	c.tlsConn = tlsConn
 
-	c.Reader = bufio.NewReaderSize(c.tlsConn, defaultBufferSize)
-	c.Writer = bufio.NewWriterSize(c.tlsConn, c.OutputBufferSize)
+	c.Reader = bufio.NewReaderSize(c.tlsConn, defaultBufferSize)  // 增加TLS协议生成读取流对象,最大大小限制16KB
+	c.Writer = bufio.NewWriterSize(c.tlsConn, c.OutputBufferSize) // 增加TLS协议生成写入流对象,最大大小限制设置值(客户端设置,不能超过nsqd服务端的限制范围[64B,64KB])
 
 	atomic.StoreInt32(&c.TLS, 1)
 
 	return nil
 }
 
+// UpgradeDeflate 更新设置Deflate压缩算法的压缩等级,同时更新读取流和写入流对象
 func (c *clientV2) UpgradeDeflate(level int) error {
 	c.writeLock.Lock()
 	defer c.writeLock.Unlock()
@@ -602,6 +613,7 @@ func (c *clientV2) UpgradeDeflate(level int) error {
 	return nil
 }
 
+// UpgradeSnappy 更新设置为Snappy压缩算法,同时更新读取流和写入流对象
 func (c *clientV2) UpgradeSnappy() error {
 	c.writeLock.Lock()
 	defer c.writeLock.Unlock()
@@ -620,15 +632,16 @@ func (c *clientV2) UpgradeSnappy() error {
 	return nil
 }
 
+// Flush 刷新写入流数据
 func (c *clientV2) Flush() error {
 	var zeroTime time.Time
 	if c.HeartbeatInterval > 0 {
-		c.SetWriteDeadline(time.Now().Add(c.HeartbeatInterval))
+		c.SetWriteDeadline(time.Now().Add(c.HeartbeatInterval)) // 设置写入数据的截至时间
 	} else {
-		c.SetWriteDeadline(zeroTime)
+		c.SetWriteDeadline(zeroTime) // 设置写入数据无截至时间
 	}
 
-	err := c.Writer.Flush()
+	err := c.Writer.Flush() // Flush将任何缓冲的数据写入底层的io.Writer中。
 	if err != nil {
 		return err
 	}
@@ -640,6 +653,7 @@ func (c *clientV2) Flush() error {
 	return nil
 }
 
+// QueryAuthd 查询并获取鉴权
 func (c *clientV2) QueryAuthd() error {
 	remoteIP := ""
 	if c.RemoteAddr().Network() == "tcp" {

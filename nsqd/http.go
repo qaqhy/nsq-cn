@@ -415,8 +415,7 @@ func (s *httpServer) doPauseTopic(w http.ResponseWriter, req *http.Request, ps h
 		return nil, http_api.Err{Code: 500, Text: "INTERNAL_ERROR"}
 	}
 
-	// pro-actively persist metadata so in case of process failure
-	// nsqd won't suddenly (un)pause a topic
+	// 主动持久化元数据，以便在进程失败的情况下，nsqd不会突然（取消）暂停主题topic
 	s.nsqd.Lock()
 	s.nsqd.PersistMetadata()
 	s.nsqd.Unlock()
@@ -486,8 +485,7 @@ func (s *httpServer) doPauseChannel(w http.ResponseWriter, req *http.Request, ps
 		return nil, http_api.Err{Code: 500, Text: "INTERNAL_ERROR"}
 	}
 
-	// pro-actively persist metadata so in case of process failure
-	// nsqd won't suddenly (un)pause a channel
+	// 主动持久化元数据，以便在进程失败的情况下，nsqd不会突然（取消）暂停通道channel
 	s.nsqd.Lock()
 	s.nsqd.PersistMetadata()
 	s.nsqd.Unlock()
