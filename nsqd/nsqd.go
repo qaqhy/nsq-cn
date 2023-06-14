@@ -291,20 +291,20 @@ func (n *NSQD) Main() error {
 	return err
 }
 
-// Metadata is the collection of persistent information about the current NSQD.
+// Metadata 是关于当前NSQD的持久性信息的集合。
 type Metadata struct {
 	Topics  []TopicMetadata `json:"topics"`
 	Version string          `json:"version"`
 }
 
-// TopicMetadata is the collection of persistent information about a topic.
+// TopicMetadata 是关于一个主题的持久性信息的集合。
 type TopicMetadata struct {
 	Name     string            `json:"name"`
 	Paused   bool              `json:"paused"`
 	Channels []ChannelMetadata `json:"channels"`
 }
 
-// ChannelMetadata is the collection of persistent information about a channel.
+// ChannelMetadata 是关于一个频道的持久性信息的集合。
 type ChannelMetadata struct {
 	Name   string `json:"name"`
 	Paused bool   `json:"paused"`
@@ -314,6 +314,7 @@ func newMetadataFile(opts *Options) string {
 	return path.Join(opts.DataPath, "nsqd.dat")
 }
 
+// readOrEmpty 从fn文件中读取字节数据,若是文件不存在的错误则返回nil,其他错误则返回错误对象
 func readOrEmpty(fn string) ([]byte, error) {
 	data, err := os.ReadFile(fn)
 	if err != nil {
@@ -324,6 +325,7 @@ func readOrEmpty(fn string) ([]byte, error) {
 	return data, nil
 }
 
+// writeSyncFile 将data数据写入到fn文件中
 func writeSyncFile(fn string, data []byte) error {
 	f, err := os.OpenFile(fn, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
 	if err != nil {
@@ -438,9 +440,10 @@ func (n *NSQD) PersistMetadata() error {
 	return nil
 }
 
+// Exit nsqd优雅退出方法
 func (n *NSQD) Exit() {
 	if !atomic.CompareAndSwapInt32(&n.isExiting, 0, 1) {
-		// avoid double call
+		// 避免重复调用
 		return
 	}
 	if n.tcpListener != nil { // tcpListener对象存在则优雅关闭
@@ -460,7 +463,7 @@ func (n *NSQD) Exit() {
 	}
 
 	n.Lock()
-	err := n.PersistMetadata()
+	err := n.PersistMetadata() // 持久元数据
 	if err != nil {
 		n.logf(LOG_ERROR, "failed to persist metadata - %s", err)
 	}
@@ -623,11 +626,11 @@ func (n *NSQD) resizePool(num int, workCh chan *Channel, responseCh chan bool, c
 		if idealPoolSize == n.poolSize {
 			break
 		} else if idealPoolSize < n.poolSize {
-			// contract
+			// 释放多余的queueScanWorker协程
 			closeCh <- 1
 			n.poolSize--
 		} else {
-			// expand
+			// 增加queueScanWorker协程
 			n.waitGroup.Wrap(func() {
 				n.queueScanWorker(workCh, responseCh, closeCh)
 			})
