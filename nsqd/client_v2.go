@@ -128,7 +128,7 @@ type clientV2 struct {
 	FinishCount   uint64
 	RequeueCount  uint64
 
-	pubCounts map[string]uint64
+	pubCounts map[string]uint64 // 发布消息map统计
 
 	writeLock sync.RWMutex
 	metaLock  sync.RWMutex
@@ -137,14 +137,14 @@ type clientV2 struct {
 	nsqd      *NSQD
 	UserAgent string
 
-	// original connection
+	// 原始连接
 	net.Conn
 
-	// connections based on negotiated features
+	// 基于协商特征的连接
 	tlsConn     *tls.Conn
 	flateWriter *flate.Writer
 
-	// reading/writing interfaces
+	// 读/写流对象接口
 	Reader *bufio.Reader
 	Writer *bufio.Writer
 
@@ -170,10 +170,10 @@ type clientV2 struct {
 	SubEventChan      chan *Channel
 
 	TLS     int32
-	Snappy  int32
-	Deflate int32
+	Snappy  int32 // Snappy压缩算法状态,1:启用
+	Deflate int32 // Deflate压缩算法状态,1:启用
 
-	// re-usable buffer for reading the 4-byte lengths off the wire
+	// 可重复使用的缓冲区，用于读取流上的4字节长度
 	lenBuf   [4]byte
 	lenSlice []byte
 
@@ -201,12 +201,11 @@ func newClientV2(id int64, conn net.Conn, nsqd *NSQD) *clientV2 {
 
 		MsgTimeout: nsqd.getOpts().MsgTimeout,
 
-		// ReadyStateChan has a buffer of 1 to guarantee that in the event
-		// there is a race the state update is not lost
+		// ReadyStateChan 是一个长度为1的缓冲区，以保证在有竞争的情况下，状态更新数据不会丢失。
 		ReadyStateChan: make(chan int, 1),
 		ExitChan:       make(chan int),
 		ConnectTime:    time.Now(),
-		State:          stateInit,
+		State:          stateInit, // 默认为初始化状态,等待鉴权IDENTIFY,鉴权完成后进行订阅SUB
 
 		ClientID: identifier,
 		Hostname: identifier,
@@ -214,12 +213,12 @@ func newClientV2(id int64, conn net.Conn, nsqd *NSQD) *clientV2 {
 		SubEventChan:      make(chan *Channel, 1),
 		IdentifyEventChan: make(chan identifyEvent, 1),
 
-		// heartbeats are client configurable but default to 30s
+		// 心跳是客户端可配置的，但默认为30秒。(客户端超时时间的1/2)
 		HeartbeatInterval: nsqd.getOpts().ClientTimeout / 2,
 
 		pubCounts: make(map[string]uint64),
 	}
-	c.lenSlice = c.lenBuf[:]
+	c.lenSlice = c.lenBuf[:] // 初始化4字节,TCP交互中前4字节是消息体的长度数据
 	return c
 }
 
@@ -413,9 +412,9 @@ func (c *clientV2) IsReadyForMessages() bool {
 	return true
 }
 
-// SetReadyCount 设置客户端的读取数据量大小,若设置值与旧值不通则发送读取状态更新的通知
+// SetReadyCount 设置客户端的读取数据量条数,若设置值与旧值不通则发送读取状态更新的通知
 func (c *clientV2) SetReadyCount(count int64) {
-	oldCount := atomic.SwapInt64(&c.ReadyCount, count) // 设置客户端的读取数据量大小
+	oldCount := atomic.SwapInt64(&c.ReadyCount, count) // 设置客户端的读取数据量条数
 
 	if oldCount != count {
 		c.tryUpdateReadyState()
@@ -433,13 +432,14 @@ func (c *clientV2) tryUpdateReadyState() {
 	}
 }
 
-// 更新
+// 更新消息成功消费数和飞行队列(消费队列)中的消息数量
 func (c *clientV2) FinishedMessage() {
 	atomic.AddUint64(&c.FinishCount, 1)
 	atomic.AddInt64(&c.InFlightCount, -1)
 	c.tryUpdateReadyState()
 }
 
+// Empty 清空此客户端连接对象上的飞行队列计数
 func (c *clientV2) Empty() {
 	atomic.StoreInt64(&c.InFlightCount, 0)
 	c.tryUpdateReadyState()
@@ -450,12 +450,14 @@ func (c *clientV2) SendingMessage() {
 	atomic.AddUint64(&c.MessageCount, 1)
 }
 
+// PublishedMessage 更新此客户端连接发布消息到指定topic的统计数据
 func (c *clientV2) PublishedMessage(topic string, count uint64) {
 	c.metaLock.Lock()
 	c.pubCounts[topic] += count
 	c.metaLock.Unlock()
 }
 
+// TimedOutMessage 消息消费超时更新飞行队列计数
 func (c *clientV2) TimedOutMessage() {
 	atomic.AddInt64(&c.InFlightCount, -1)
 	c.tryUpdateReadyState()
@@ -468,9 +470,9 @@ func (c *clientV2) RequeuedMessage() {
 }
 
 func (c *clientV2) StartClose() {
-	// Force the client into ready 0
+	// 强制设置客户端不再分发任务
 	c.SetReadyCount(0)
-	// mark this client as closing
+	// 将此客户标记为关闭
 	atomic.StoreInt32(&c.State, stateClosing)
 }
 

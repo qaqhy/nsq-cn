@@ -177,19 +177,19 @@ func (t *Topic) DeleteExistingChannel(channelName string) error {
 	return nil
 }
 
-// PutMessage writes a Message to the queue
+// PutMessage 向队列中写入一个消息对象
 func (t *Topic) PutMessage(m *Message) error {
 	t.RLock()
 	defer t.RUnlock()
-	if atomic.LoadInt32(&t.exitFlag) == 1 {
+	if atomic.LoadInt32(&t.exitFlag) == 1 { // 如果客户端连接处于退出状态则返回错误信息
 		return errors.New("exiting")
 	}
 	err := t.put(m)
 	if err != nil {
 		return err
 	}
-	atomic.AddUint64(&t.messageCount, 1)
-	atomic.AddUint64(&t.messageBytes, uint64(len(m.Body)))
+	atomic.AddUint64(&t.messageCount, 1)                   // topic的消息数加一
+	atomic.AddUint64(&t.messageBytes, uint64(len(m.Body))) // 更新topic的消息内容总长度
 	return nil
 }
 

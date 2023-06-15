@@ -562,6 +562,7 @@ func (c *Channel) addToDeferredPQ(item *pqueue.Item) {
 	c.deferredMutex.Unlock()
 }
 
+// processDeferredQueue 检查延迟队列中的消息对象并将到达消费时间的消息对象放到此频道的消息通道中
 func (c *Channel) processDeferredQueue(t int64) bool {
 	c.exitMutex.RLock()
 	defer c.exitMutex.RUnlock()
@@ -593,6 +594,7 @@ exit:
 	return dirty
 }
 
+// processInFlightQueue 检查飞行队列中的消息对象并将消费超时的消息对象重新放到此频道的消息通道中
 func (c *Channel) processInFlightQueue(t int64) bool {
 	c.exitMutex.RLock()
 	defer c.exitMutex.RUnlock()
