@@ -241,9 +241,9 @@ func (c *clientV2) Identify(data identifyDataV2) error {
 	c.nsqd.logf(LOG_INFO, "[%s] IDENTIFY: %+v", c, data)
 
 	c.metaLock.Lock()
-	c.ClientID = data.ClientID
-	c.Hostname = data.Hostname
-	c.UserAgent = data.UserAgent
+	c.ClientID = data.ClientID   // 根据客户端传入数据更新ClientID
+	c.Hostname = data.Hostname   // 根据客户端传入数据更新Hostname
+	c.UserAgent = data.UserAgent // 根据客户端传入数据更新UserAgent
 	c.metaLock.Unlock()
 
 	// 更新设置合法的心跳间隔时间
@@ -287,6 +287,7 @@ func (c *clientV2) Identify(data identifyDataV2) error {
 	return nil
 }
 
+// Stats 获取此客户端连接对象的信息及指定topic下的发布统计信息
 func (c *clientV2) Stats(topicName string) ClientStats {
 	c.metaLock.RLock()
 	clientID := c.ClientID
@@ -342,7 +343,7 @@ func (c *clientV2) Stats(topicName string) ClientStats {
 	return stats
 }
 
-// struct to convert from integers to the human readable strings
+// 此结构体用于将整数转换为人类可读的字符串内容
 type prettyConnectionState struct {
 	tls.ConnectionState
 }
@@ -494,7 +495,7 @@ func (c *clientV2) SetHeartbeatInterval(desiredInterval int) error {
 	case desiredInterval == -1:
 		c.HeartbeatInterval = 0
 	case desiredInterval == 0:
-		// do nothing (use default)
+		// 不执行任何操作（使用默认值）
 	case desiredInterval >= 1000 &&
 		desiredInterval <= int(c.nsqd.getOpts().MaxHeartbeatInterval/time.Millisecond):
 		c.HeartbeatInterval = time.Duration(desiredInterval) * time.Millisecond
@@ -627,8 +628,9 @@ func (c *clientV2) UpgradeSnappy() error {
 	}
 
 	c.Reader = bufio.NewReaderSize(snappy.NewReader(conn), defaultBufferSize)
-	//lint:ignore SA1019 NewWriter is deprecated by NewBufferedWriter, but we're doing our own buffering
-	c.Writer = bufio.NewWriterSize(snappy.NewWriter(conn), c.OutputBufferSize)
+	// lint:ignore SA1019 NewWriter已被弃用，推荐使用NewBufferedWriter方法, 但我们在做自己的缓冲。
+	// c.Writer = bufio.NewWriterSize(snappy.NewWriter(conn), c.OutputBufferSize)
+	c.Writer = bufio.NewWriterSize(snappy.NewBufferedWriter(conn), c.OutputBufferSize)
 
 	atomic.StoreInt32(&c.Snappy, 1)
 
