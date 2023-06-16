@@ -469,6 +469,7 @@ func (c *clientV2) RequeuedMessage() {
 	c.tryUpdateReadyState()
 }
 
+// StartClose 关闭客户端连接对象,设置为关闭状态
 func (c *clientV2) StartClose() {
 	// 强制设置客户端不再分发任务
 	c.SetReadyCount(0)
