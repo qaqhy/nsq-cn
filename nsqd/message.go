@@ -39,6 +39,40 @@ func NewMessage(id MessageID, body []byte) *Message {
 	}
 }
 
+// writeTo 将消息数据(包含延迟信息)写入到w流中
+func (m *Message) writeTo(w io.Writer) (int64, error) {
+	var buf [18]byte
+	var total int64
+	var expire int64
+
+	binary.BigEndian.PutUint64(buf[:8], uint64(m.Timestamp))
+	binary.BigEndian.PutUint16(buf[8:10], uint16(m.Attempts))
+	if m.deferred != 0 {
+		expire = time.Now().Add(m.deferred).UnixNano()
+	}
+	binary.BigEndian.PutUint64(buf[10:18], uint64(expire))
+
+	n, err := w.Write(buf[:]) // 前8字节写入时间戳信息,8-10字节写入重试次数信息,10-18字节写入过期时间戳信息
+	total += int64(n)
+	if err != nil {
+		return total, err
+	}
+
+	n, err = w.Write(m.ID[:]) // 18-34字节写入消息ID信息
+	total += int64(n)
+	if err != nil {
+		return total, err
+	}
+
+	n, err = w.Write(m.Body) // 34字节后写入消息体信息
+	total += int64(n)
+	if err != nil {
+		return total, err
+	}
+
+	return total, nil
+}
+
 // WriteTo 将消息数据写入到w流中
 func (m *Message) WriteTo(w io.Writer) (int64, error) {
 	var buf [10]byte
@@ -47,19 +81,19 @@ func (m *Message) WriteTo(w io.Writer) (int64, error) {
 	binary.BigEndian.PutUint64(buf[:8], uint64(m.Timestamp))
 	binary.BigEndian.PutUint16(buf[8:10], uint16(m.Attempts))
 
-	n, err := w.Write(buf[:]) // 前8字节写入时间戳信息
+	n, err := w.Write(buf[:]) // 前8字节写入时间戳信息,8-10字节写入重试次数信息
 	total += int64(n)
 	if err != nil {
 		return total, err
 	}
 
-	n, err = w.Write(m.ID[:]) // 8-10字节写入重试次数信息
+	n, err = w.Write(m.ID[:]) // 10-26字节写入消息ID信息
 	total += int64(n)
 	if err != nil {
 		return total, err
 	}
 
-	n, err = w.Write(m.Body) // 10字节后写入消息体信息
+	n, err = w.Write(m.Body) // 26字节后写入消息体信息
 	total += int64(n)
 	if err != nil {
 		return total, err
@@ -70,16 +104,17 @@ func (m *Message) WriteTo(w io.Writer) (int64, error) {
 
 // decodeMessage deserializes data (as []byte) and creates a new Message
 //
-//	[x][x][x][x][x][x][x][x][x][x][x][x][x][x][x][x][x][x][x][x][x][x][x][x][x][x][x][x][x][x]...
-//	|       (int64)        ||    ||      (hex string encoded in ASCII)           || (binary)
-//	|       8-byte         ||    ||                 16-byte                      || N-byte
-//	------------------------------------------------------------------------------------------...
-//	  nanosecond timestamp    ^^                   message ID                       message body
+//	[x][x][x][x][x][x][x][x][x][x][x][x][x][x][x][x][x][x][x][x][x][x][x][x][x][x][x][x][x][x][x][x][x][x][x][x][x][x]...
+//	|       (int64)        ||    ||       (int64)        ||      (hex string encoded in ASCII)           || (binary)
+//	|       8-byte         ||    ||       8-byte         ||                 16-byte                      || N-byte
+//	------------------------------------------------------------------------------------------------------------------...
+//	  nanosecond timestamp    ^^    nanosecond expire                     message ID                       message body
 //	                       (uint16)
 //	                        2-byte
 //	                       attempts
 func decodeMessage(b []byte) (*Message, error) {
 	var msg Message
+	var expire int64
 
 	if len(b) < minValidMsgLength {
 		return nil, fmt.Errorf("invalid message buffer size (%d)", len(b))
@@ -87,8 +122,15 @@ func decodeMessage(b []byte) (*Message, error) {
 
 	msg.Timestamp = int64(binary.BigEndian.Uint64(b[:8]))
 	msg.Attempts = binary.BigEndian.Uint16(b[8:10])
-	copy(msg.ID[:], b[10:10+MsgIDLength])
-	msg.Body = b[10+MsgIDLength:]
+	expire = int64(binary.BigEndian.Uint64(b[10:18]))
+	if expire > 0 {
+		ts := time.Now().UnixNano()
+		if expire > ts {
+			msg.deferred = time.Duration(expire - ts)
+		}
+	}
+	copy(msg.ID[:], b[18:18+MsgIDLength])
+	msg.Body = b[18+MsgIDLength:]
 
 	return &msg, nil
 }
@@ -97,7 +139,7 @@ func decodeMessage(b []byte) (*Message, error) {
 func writeMessageToBackend(msg *Message, bq BackendQueue) error {
 	buf := bufferPoolGet()     // 获取缓冲区对象
 	defer bufferPoolPut(buf)   // 结束时暂存缓冲区对象
-	_, err := msg.WriteTo(buf) // 将数据写入到缓冲区对象中
+	_, err := msg.writeTo(buf) // 将数据写入到缓冲区对象中
 	if err != nil {
 		return err
 	}

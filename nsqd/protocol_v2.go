@@ -306,6 +306,11 @@ func (p *protocolV2) messagePump(client *clientV2, startedChan chan bool) {
 				p.nsqd.logf(LOG_ERROR, "failed to decode message - %s", err)
 				continue
 			}
+			if msg.deferred != 0 {
+				subChannel.StartDeferredTimeout(msg, msg.deferred)
+				continue
+			}
+
 			msg.Attempts++ // 消息对象发送到消费队列中前需要设置此消息超时时间并增加一次分发次数
 
 			subChannel.StartInFlightTimeout(msg, client.ID, msgTimeout) // 设置消费截至时间

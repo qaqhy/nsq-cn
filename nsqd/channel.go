@@ -357,7 +357,7 @@ func (c *Channel) TouchMessage(clientID int64, id MessageID, clientMsgTimeout ti
 	if err != nil {
 		return err
 	}
-	c.addToInFlightPQ(msg)
+	c.addToInFlightPQ(msg) // 向飞行中队列(消费队列)中添加此消息
 	return nil
 }
 
@@ -468,7 +468,7 @@ func (c *Channel) StartInFlightTimeout(msg *Message, clientID int64, timeout tim
 	if err != nil {
 		return err
 	}
-	c.addToInFlightPQ(msg) // 向飞行中队列中(消费队列中)添加此消息
+	c.addToInFlightPQ(msg) // 向飞行中队列(消费队列)中添加此消息
 	return nil
 }
 
@@ -514,7 +514,7 @@ func (c *Channel) popInFlightMessage(clientID int64, id MessageID) (*Message, er
 	return msg, nil
 }
 
-// addToInFlightPQ 将消息对象增加到飞行中队列中(消费队列中)
+// addToInFlightPQ 将消息对象增加到飞行中队列(消费队列)中
 func (c *Channel) addToInFlightPQ(msg *Message) {
 	c.inFlightMutex.Lock()
 	c.inFlightPQ.Push(msg) // 将数据加入到pqueue队列中
