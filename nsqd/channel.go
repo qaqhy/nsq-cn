@@ -59,7 +59,13 @@ type Channel struct {
 	deleteCallback func(*Channel)
 	deleter        sync.Once
 
-	// Stats tracking
+	// 链路追踪对象
+	//    1.跟踪消息从产生到最后完成消费所需的时间。
+	//    2.计算端到端处理延迟的各种分位数（percentiles），包括最大、最小、中位数、平均数、标准差等等。
+	// 在初始化对象时，需要传入两个参数：
+	//    1.窗口时间（window time）和分位数（percentiles）。窗口时间表示要统计的时间段，例如 10 秒、30 秒或 1 分钟等等。
+	//    2.分位数则用于计算百分位数，例如 50%（中位数）、90%、95%、99% 等等。对于每个分位数，对象会记录当前窗口时间内所有消息的端到端处理延迟，
+	//      并据此计算出相应的百分点值，以及平均数、标准差等统计数据。
 	e2eProcessingLatencyStream *quantile.Quantile
 
 	// TODO: these can be DRYd up
@@ -71,7 +77,7 @@ type Channel struct {
 	inFlightMutex    sync.Mutex
 }
 
-// NewChannel creates a new instance of the Channel type and returns a pointer
+// NewChannel 创建一个新的Channel类型的实例并返回一个指针
 func NewChannel(topicName string, channelName string, nsqd *NSQD,
 	deleteCallback func(*Channel)) *Channel {
 
@@ -84,13 +90,13 @@ func NewChannel(topicName string, channelName string, nsqd *NSQD,
 		nsqd:           nsqd,
 		ephemeral:      strings.HasSuffix(channelName, "#ephemeral"),
 	}
-	// avoid mem-queue if size == 0 for more consistent ordering
+	// 如果内存队列的大小等于0且不是临时频道，则跳过内存管道的初始化
 	if nsqd.getOpts().MemQueueSize > 0 || c.ephemeral {
 		c.memoryMsgChan = make(chan *Message, nsqd.getOpts().MemQueueSize)
 	}
-	if len(nsqd.getOpts().E2EProcessingLatencyPercentiles) > 0 {
+	if len(nsqd.getOpts().E2EProcessingLatencyPercentiles) > 0 { // 存在统计的分位数设置,则初始化链路追踪对象
 		c.e2eProcessingLatencyStream = quantile.New(
-			nsqd.getOpts().E2EProcessingLatencyWindowTime,
+			nsqd.getOpts().E2EProcessingLatencyWindowTime, // 窗口时间默认10分钟
 			nsqd.getOpts().E2EProcessingLatencyPercentiles,
 		)
 	}
@@ -337,7 +343,7 @@ func (c *Channel) TouchMessage(clientID int64, id MessageID, clientMsgTimeout ti
 	if err != nil {
 		return err
 	}
-	c.removeFromInFlightPQ(msg) // 将指定消息对象从消费队列中移除
+	c.removeFromInFlightPQ(msg) // 从飞行中队列(消费队列)中删除指定消息
 
 	newTimeout := time.Now().Add(clientMsgTimeout) // 设置当前时间加上超时时间为截至时间
 	if newTimeout.Sub(msg.deliveryTS) >=
@@ -361,9 +367,9 @@ func (c *Channel) FinishMessage(clientID int64, id MessageID) error {
 	if err != nil {
 		return err
 	}
-	c.removeFromInFlightPQ(msg)              // 从飞行中队列中(消费队列中)删除指定消息
-	if c.e2eProcessingLatencyStream != nil { // 存在跟踪消息对象时执行下面操作
-		c.e2eProcessingLatencyStream.Insert(msg.Timestamp) // 将此消息从生成到消费所消耗时间更新到统计信息中
+	c.removeFromInFlightPQ(msg)              // 从飞行中队列(消费队列)中删除指定消息
+	if c.e2eProcessingLatencyStream != nil { // 存在链路跟踪对象时执行下面操作
+		c.e2eProcessingLatencyStream.Insert(msg.Timestamp) // 将此消息从产生到完成消费所消耗时间更新到链路统计中
 	}
 	return nil
 }
@@ -380,7 +386,7 @@ func (c *Channel) RequeueMessage(clientID int64, id MessageID, timeout time.Dura
 	if err != nil {
 		return err
 	}
-	c.removeFromInFlightPQ(msg)
+	c.removeFromInFlightPQ(msg)          // 从飞行中队列(消费队列)中删除指定消息
 	atomic.AddUint64(&c.requeueCount, 1) // 请求数加一
 
 	if timeout == 0 { // 实时任务放到实时队列中
@@ -499,7 +505,7 @@ func (c *Channel) popInFlightMessage(clientID int64, id MessageID) (*Message, er
 		c.inFlightMutex.Unlock()
 		return nil, errors.New("ID not in flight")
 	}
-	if msg.clientID != clientID {
+	if msg.clientID != clientID { // 消费客户端与完成客户端对象不一致
 		c.inFlightMutex.Unlock()
 		return nil, errors.New("client does not own message")
 	}
@@ -515,7 +521,7 @@ func (c *Channel) addToInFlightPQ(msg *Message) {
 	c.inFlightMutex.Unlock()
 }
 
-// removeFromInFlightPQ 从飞行中队列中(消费队列中)删除指定消息
+// removeFromInFlightPQ 从飞行中队列(消费队列)中删除指定消息
 func (c *Channel) removeFromInFlightPQ(msg *Message) {
 	c.inFlightMutex.Lock()
 	if msg.index == -1 { // 该数据从pqueue队列中取出时会标记index = -1

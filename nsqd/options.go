@@ -13,7 +13,7 @@ import (
 )
 
 type Options struct {
-	// basic options
+	// 基础选项
 	ID        int64       `flag:"node-id" cfg:"id"`
 	LogLevel  lg.LogLevel `flag:"log-level"`
 	LogPrefix string      `flag:"log-prefix"`
@@ -30,7 +30,7 @@ type Options struct {
 	HTTPClientConnectTimeout time.Duration `flag:"http-client-connect-timeout" cfg:"http_client_connect_timeout"`
 	HTTPClientRequestTimeout time.Duration `flag:"http-client-request-timeout" cfg:"http_client_request_timeout"`
 
-	// diskqueue options
+	// 磁盘队列选项
 	DataPath        string        `flag:"data-path"`
 	MemQueueSize    int64         `flag:"mem-queue-size"`
 	MaxBytesPerFile int64         `flag:"max-bytes-per-file"`
@@ -43,7 +43,7 @@ type Options struct {
 	QueueScanWorkerPoolMax   int `flag:"queue-scan-worker-pool-max"`
 	QueueScanDirtyPercent    float64
 
-	// msg and command options
+	// 消息和命令选项
 	MsgTimeout    time.Duration `flag:"msg-timeout"`
 	MaxMsgTimeout time.Duration `flag:"max-msg-timeout"`
 	MaxMsgSize    int64         `flag:"max-msg-size"`
@@ -51,7 +51,7 @@ type Options struct {
 	MaxReqTimeout time.Duration `flag:"max-req-timeout"`
 	ClientTimeout time.Duration
 
-	// client overridable configuration options
+	// 客户端可重写的配置选项
 	MaxHeartbeatInterval   time.Duration `flag:"max-heartbeat-interval"`
 	MaxRdyCount            int64         `flag:"max-rdy-count"`
 	MaxOutputBufferSize    int64         `flag:"max-output-buffer-size"`
@@ -60,7 +60,7 @@ type Options struct {
 	OutputBufferTimeout    time.Duration `flag:"output-buffer-timeout"`
 	MaxChannelConsumers    int           `flag:"max-channel-consumers"`
 
-	// statsd integration
+	// 统计集成
 	StatsdAddress          string        `flag:"statsd-address"`
 	StatsdPrefix           string        `flag:"statsd-prefix"`
 	StatsdInterval         time.Duration `flag:"statsd-interval"`
@@ -68,11 +68,11 @@ type Options struct {
 	StatsdUDPPacketSize    int           `flag:"statsd-udp-packet-size"`
 	StatsdExcludeEphemeral bool          `flag:"statsd-exclude-ephemeral"`
 
-	// e2e message latency
+	// 端到端的消息延迟,窗口时间默认10分钟
 	E2EProcessingLatencyWindowTime  time.Duration `flag:"e2e-processing-latency-window-time"`
 	E2EProcessingLatencyPercentiles []float64     `flag:"e2e-processing-latency-percentile" cfg:"e2e_processing_latency_percentiles"`
 
-	// TLS config
+	// TLS 配置
 	TLSCert             string `flag:"tls-cert"`
 	TLSKey              string `flag:"tls-key"`
 	TLSClientAuthPolicy string `flag:"tls-client-auth-policy"`
@@ -80,7 +80,7 @@ type Options struct {
 	TLSRequired         int    `flag:"tls-required"`
 	TLSMinVersion       uint16 `flag:"tls-min-version"`
 
-	// compression
+	// 压缩算法相关参数
 	DeflateEnabled  bool `flag:"deflate"`
 	MaxDeflateLevel int  `flag:"max-deflate-level"`
 	SnappyEnabled   bool `flag:"snappy"`

@@ -440,6 +440,7 @@ finish:
 	return nil
 }
 
+// AggregateChannelE2eProcessingLatency 通过此topic下的所有频道channel计算返回链路追踪对象
 func (t *Topic) AggregateChannelE2eProcessingLatency() *quantile.Quantile {
 	var latencyStream *quantile.Quantile
 	t.RLock()

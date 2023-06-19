@@ -106,6 +106,7 @@ type TopicStats struct {
 	E2eProcessingLatency *quantile.E2eProcessingLatencyAggregate `json:"e2e_processing_latency"`
 }
 
+// Add 将topic a中的数据合并到t对象中
 func (t *TopicStats) Add(a *TopicStats) {
 	t.Node = "*"
 	t.Depth += a.Depth
@@ -160,6 +161,7 @@ type ChannelStats struct {
 	E2eProcessingLatency *quantile.E2eProcessingLatencyAggregate `json:"e2e_processing_latency"`
 }
 
+// Add 将channel a中的数据合并到c对象中
 func (c *ChannelStats) Add(a *ChannelStats) {
 	c.Node = "*"
 	c.Depth += a.Depth

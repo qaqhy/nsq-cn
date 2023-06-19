@@ -249,6 +249,7 @@ func (n *NSQD) GetHealth() string {
 	return "OK"
 }
 
+// GetStartTime 获取nsqd的启动时间
 func (n *NSQD) GetStartTime() time.Time {
 	return n.startTime
 }
