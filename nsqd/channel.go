@@ -248,8 +248,14 @@ finish:
 	c.inFlightMutex.Unlock()
 
 	c.deferredMutex.Lock()
+	ts := time.Now().UnixNano()
 	for _, item := range c.deferredMessages { // 读取所有延迟中的消息持久化到磁盘中
 		msg := item.Value.(*Message)
+		if item.Priority > ts { // 提前结算延迟时间
+			msg.deferred = time.Duration(item.Priority - ts)
+		} else {
+			msg.deferred = 0
+		}
 		err := writeMessageToBackend(msg, c.backend)
 		if err != nil {
 			c.nsqd.logf(LOG_ERROR, "failed to write message to backend - %s", err)
