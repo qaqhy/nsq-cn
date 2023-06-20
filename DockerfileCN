@@ -1,0 +1,41 @@
+# FROM golang:alpine AS build
+FROM registry.cn-hangzhou.aliyuncs.com/houyao/golang:1.20.1-alpine3.17 AS build
+
+RUN sed -i 's/dl-cdn.alpinelinux.org/mirrors.ustc.edu.cn/g' /etc/apk/repositories
+RUN apk update && apk add make gcc musl-dev
+
+RUN mkdir -p /go/src/github.com/nsqio/nsq
+COPY    .    /go/src/github.com/nsqio/nsq
+WORKDIR      /go/src/github.com/nsqio/nsq
+
+RUN go env -w GO111MODULE=on
+RUN go env -w GOPROXY=https://goproxy.cn,direct
+
+# 运行nsq项目下的所有测试案例
+# RUN ./test.sh
+RUN CGO_ENABLED=0 make PREFIX=/opt/nsq BLDFLAGS='-ldflags="-s -w"' install
+
+
+# FROM alpine:latest
+FROM registry.cn-hangzhou.aliyuncs.com/houyao/alpine:3.16
+
+EXPOSE 4150 4151 4160 4161 4170 4171
+
+RUN mkdir -p /data
+WORKDIR      /data
+
+# set up nsswitch.conf for Go's "netgo" implementation
+# https://github.com/golang/go/issues/35305
+# RUN [ ! -e /etc/nsswitch.conf ] && echo 'hosts: files dns' > /etc/nsswitch.conf
+
+# Optional volumes (explicitly configure with "docker run -v ...")
+# /data          - used by nsqd for persistent storage across restarts
+# /etc/ssl/certs - for SSL Root CA certificates from host
+
+COPY --from=build /opt/nsq/bin/ /usr/local/bin/
+RUN ln -s /usr/local/bin/*nsq* / \
+ && ln -s /usr/local/bin/*nsq* /bin/
+
+
+# docker build -t registry.cn-hangzhou.aliyuncs.com/houyao/nsq:v1.2.1 -f DockerfileCN .
+

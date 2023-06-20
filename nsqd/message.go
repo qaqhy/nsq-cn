@@ -8,8 +8,8 @@ import (
 )
 
 const (
-	MsgIDLength       = 16                  // 消息ID的长度
-	minValidMsgLength = MsgIDLength + 8 + 2 // Timestamp + Attempts 最小有效的消息内容长度
+	MsgIDLength       = 16                      // 消息ID的长度
+	minValidMsgLength = MsgIDLength + 8 + 2 + 8 // Timestamp + Attempts + expire 最小有效的消息内容长度
 )
 
 type MessageID [MsgIDLength]byte
@@ -39,8 +39,8 @@ func NewMessage(id MessageID, body []byte) *Message {
 	}
 }
 
-// writeTo 将消息数据(包含延迟信息)写入到w流中
-func (m *Message) writeTo(w io.Writer) (int64, error) {
+// WriteTo 将消息数据(包含延迟信息)写入到w流中
+func (m *Message) WriteTo(w io.Writer) (int64, error) {
 	var buf [18]byte
 	var total int64
 	var expire int64
@@ -73,8 +73,8 @@ func (m *Message) writeTo(w io.Writer) (int64, error) {
 	return total, nil
 }
 
-// WriteTo 将消息数据写入到w流中
-func (m *Message) WriteTo(w io.Writer) (int64, error) {
+// WriteToTCP 将消息数据写入到w流中
+func (m *Message) WriteToTCP(w io.Writer) (int64, error) {
 	var buf [10]byte
 	var total int64
 
@@ -139,7 +139,7 @@ func decodeMessage(b []byte) (*Message, error) {
 func writeMessageToBackend(msg *Message, bq BackendQueue) error {
 	buf := bufferPoolGet()     // 获取缓冲区对象
 	defer bufferPoolPut(buf)   // 结束时暂存缓冲区对象
-	_, err := msg.writeTo(buf) // 将数据写入到缓冲区对象中
+	_, err := msg.WriteTo(buf) // 将数据写入到缓冲区对象中
 	if err != nil {
 		return err
 	}
