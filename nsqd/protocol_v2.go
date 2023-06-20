@@ -129,7 +129,8 @@ func (p *protocolV2) SendMessage(client *clientV2, msg *Message) error {
 	buf := bufferPoolGet()
 	defer bufferPoolPut(buf)
 
-	_, err := msg.WriteToTCP(buf) // 将msg对象写入到buf对象中
+	msg.deferred = 0
+	_, err := msg.WriteTo(buf) // 将msg对象写入到buf对象中
 	if err != nil {
 		return err
 	}
