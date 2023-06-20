@@ -171,35 +171,35 @@ func (p *protocolV2) Send(client *clientV2, frameType int32, data []byte) error 
 // Exec TCP路由逻辑
 func (p *protocolV2) Exec(client *clientV2, params [][]byte) ([]byte, error) {
 	if bytes.Equal(params[0], []byte("IDENTIFY")) {
-		return p.IDENTIFY(client, params)
+		return p.IDENTIFY(client, params) // IDENTIFY 鉴权数据更新(消费者方法)
 	}
-	err := enforceTLSPolicy(client, p, params[0])
+	err := enforceTLSPolicy(client, p, params[0]) // enforceTLSPolicy 用于检查并强制执行 TLS 策略。
 	if err != nil {
 		return nil, err
 	}
 	switch {
 	case bytes.Equal(params[0], []byte("FIN")):
-		return p.FIN(client, params)
+		return p.FIN(client, params) // FIN 修改消息状态为完成消费状态(消费者方法)
 	case bytes.Equal(params[0], []byte("RDY")):
-		return p.RDY(client, params)
+		return p.RDY(client, params) // RDY 设置客户端的读取数据量条数(消费者方法)
 	case bytes.Equal(params[0], []byte("REQ")):
-		return p.REQ(client, params)
+		return p.REQ(client, params) // REQ 发送请求将指定消息ID重新加入到消费队列中(消费者方法)
 	case bytes.Equal(params[0], []byte("PUB")):
-		return p.PUB(client, params)
+		return p.PUB(client, params) // PUB 发布单条消息(生产者方法)
 	case bytes.Equal(params[0], []byte("MPUB")):
-		return p.MPUB(client, params)
+		return p.MPUB(client, params) // MPUB 发布多条消息(生产者方法)
 	case bytes.Equal(params[0], []byte("DPUB")):
-		return p.DPUB(client, params)
+		return p.DPUB(client, params) // DPUB 发布一条延迟消息(生产者方法)
 	case bytes.Equal(params[0], []byte("NOP")):
-		return p.NOP(client, params)
+		return p.NOP(client, params) // NOP 空操作,啥也不做
 	case bytes.Equal(params[0], []byte("TOUCH")):
-		return p.TOUCH(client, params)
+		return p.TOUCH(client, params) // TOUCH 重置飞行中(消费中)消息的超时设置(消费者方法)
 	case bytes.Equal(params[0], []byte("SUB")):
-		return p.SUB(client, params)
+		return p.SUB(client, params) // SUB 消费者订阅指定topic并创建channel对象(消费者方法)
 	case bytes.Equal(params[0], []byte("CLS")):
-		return p.CLS(client, params)
+		return p.CLS(client, params) // CLS 客户端连接请求关闭(消费者方法)
 	case bytes.Equal(params[0], []byte("AUTH")):
-		return p.AUTH(client, params)
+		return p.AUTH(client, params) // AUTH 客户端连接认证方法(消费者方法)
 	}
 	return nil, protocol.NewFatalClientErr(nil, "E_INVALID", fmt.Sprintf("invalid command %s", params[0]))
 }
@@ -348,8 +348,8 @@ exit:
 	}
 }
 
-// IDENTIFY 鉴权数据更新
-// 此命令是客户端作为消费者和nsqd之间建立连接后必须发送的第一个命令，只有成功鉴权才能执行后续消费的请求(消费者)
+// IDENTIFY 鉴权数据更新(消费者方法)
+// 此命令是客户端作为消费者和nsqd之间建立连接后必须发送的第一个命令，只有成功鉴权才能执行后续消费的请求
 func (p *protocolV2) IDENTIFY(client *clientV2, params [][]byte) ([]byte, error) {
 	var err error
 
@@ -492,6 +492,8 @@ func (p *protocolV2) IDENTIFY(client *clientV2, params [][]byte) ([]byte, error)
 	return nil, nil
 }
 
+// AUTH 客户端连接认证方法(消费者方法)
+// IDENTIFY方法后SUB方法前执行
 func (p *protocolV2) AUTH(client *clientV2, params [][]byte) ([]byte, error) {
 	if atomic.LoadInt32(&client.State) != stateInit {
 		return nil, protocol.NewFatalClientErr(nil, "E_INVALID", "cannot AUTH in current state")
@@ -588,7 +590,7 @@ func (p *protocolV2) CheckAuth(client *clientV2, cmd, topicName, channelName str
 	return nil
 }
 
-// SUB 消费者订阅指定topic并创建channel对象(消费者)
+// SUB 消费者订阅指定topic并创建channel对象(消费者方法)
 func (p *protocolV2) SUB(client *clientV2, params [][]byte) ([]byte, error) {
 	if atomic.LoadInt32(&client.State) != stateInit { // 客户端连接的状态如果是初始化状态则返回错误信息
 		return nil, protocol.NewFatalClientErr(nil, "E_INVALID", "cannot SUB in current state")
@@ -646,7 +648,7 @@ func (p *protocolV2) SUB(client *clientV2, params [][]byte) ([]byte, error) {
 	return okBytes, nil
 }
 
-// RDY 设置客户端的读取数据量条数(消费者)
+// RDY 设置客户端的读取数据量条数(消费者方法)
 func (p *protocolV2) RDY(client *clientV2, params [][]byte) ([]byte, error) {
 	state := atomic.LoadInt32(&client.State)
 
