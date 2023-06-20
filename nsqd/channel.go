@@ -599,6 +599,7 @@ func (c *Channel) processDeferredQueue(t int64) bool {
 		if err != nil {
 			goto exit
 		}
+		msg.deferred = 0 // 标记此消息为实时消息,落盘也不受影响
 		c.put(msg)
 	}
 
