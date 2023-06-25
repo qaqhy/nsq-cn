@@ -24,6 +24,7 @@ func (e Err) Error() string {
 	return e.Text
 }
 
+// PlainText 通过此对象包装的方法会检验返回数据类型是否正常(字符串或字节类型)并以合适的方式写入到写入流中,异常数据类型则触发恐慌
 func PlainText(f APIHandler) APIHandler {
 	return func(w http.ResponseWriter, req *http.Request, ps httprouter.Params) (interface{}, error) {
 		code := 200
@@ -46,6 +47,7 @@ func PlainText(f APIHandler) APIHandler {
 	}
 }
 
+// V1 通过V1协议写入数据到写入流中
 func V1(f APIHandler) APIHandler {
 	return func(w http.ResponseWriter, req *http.Request, ps httprouter.Params) (interface{}, error) {
 		data, err := f(w, req, ps)
@@ -58,6 +60,7 @@ func V1(f APIHandler) APIHandler {
 	}
 }
 
+// RespondV1 写入返回code和请求头以及请求体信息到w写入流中
 func RespondV1(w http.ResponseWriter, code int, data interface{}) {
 	var response []byte
 	var err error
@@ -96,6 +99,7 @@ func RespondV1(w http.ResponseWriter, code int, data interface{}) {
 	w.Write(response)
 }
 
+// Decorate 装饰器,将f对象使用缺省参数ds包装一下
 func Decorate(f APIHandler, ds ...Decorator) httprouter.Handle {
 	decorated := f
 	for _, decorate := range ds {
@@ -106,18 +110,19 @@ func Decorate(f APIHandler, ds ...Decorator) httprouter.Handle {
 	}
 }
 
+// Log 通过此对象包装的方法会统计打印消耗时间信息
 func Log(logf lg.AppLogFunc) Decorator {
 	return func(f APIHandler) APIHandler {
 		return func(w http.ResponseWriter, req *http.Request, ps httprouter.Params) (interface{}, error) {
 			start := time.Now()
 			response, err := f(w, req, ps)
-			elapsed := time.Since(start)
+			elapsed := time.Since(start) // 请求到结束所消耗的时间
 			status := 200
 			if e, ok := err.(Err); ok {
 				status = e.Code
 			}
 			logf(lg.INFO, "%d %s %s (%s) %s",
-				status, req.Method, req.URL.RequestURI(), req.RemoteAddr, elapsed)
+				status, req.Method, req.URL.RequestURI(), req.RemoteAddr, elapsed) // 输出日志包含请求到结束所消耗的时间
 			return response, err
 		}
 	}

@@ -39,33 +39,34 @@ type httpServer struct {
 	router      http.Handler
 }
 
+// newHTTPServer 初始化httpServer结构体对象
 func newHTTPServer(nsqd *NSQD, tlsEnabled bool, tlsRequired bool) *httpServer {
-	log := http_api.Log(nsqd.logf)
+	log := http_api.Log(nsqd.logf) // 初始化日志对象,通过此对象包装的方法会统计打印消耗时间信息
 
-	router := httprouter.New()
-	router.HandleMethodNotAllowed = true
-	router.PanicHandler = http_api.LogPanicHandler(nsqd.logf)
-	router.NotFound = http_api.LogNotFoundHandler(nsqd.logf)
-	router.MethodNotAllowed = http_api.LogMethodNotAllowedHandler(nsqd.logf)
+	router := httprouter.New()                                               // 初始化路由对象
+	router.HandleMethodNotAllowed = true                                     // 如果启用，路由器会检查当前路由是否会被其他方法处理，如果当前请求无法被路由将以'Method Not Allowed'和HTTP状态码405来回答。如果没启用，该请求将被委托给NotFound处理程序。
+	router.PanicHandler = http_api.LogPanicHandler(nsqd.logf)                // 初始化恐慌处理方法,处理从http处理程序恢复的恐慌的函数。它应该被用来生成一个错误页面并返回http错误代码500（内部服务器错误）。该处理程序可以用来防止你的服务器因为未恢复的恐慌而崩溃。
+	router.NotFound = http_api.LogNotFoundHandler(nsqd.logf)                 // 可配置的http.Handler，当没有找到匹配的路由时被调用。如果它没有被设置，则使用http.NotFound。
+	router.MethodNotAllowed = http_api.LogMethodNotAllowedHandler(nsqd.logf) // 可配置的http.Handler，当一个请求不能被路由且HandleMethodNotAllowed为真时，它被调用。如果没有设置，则使用http.Error和http.StatusMethodNotAllowed。在处理程序被调用之前，允许请求方法的 "Allow "头被设置。
 	s := &httpServer{
-		nsqd:        nsqd,
-		tlsEnabled:  tlsEnabled,
-		tlsRequired: tlsRequired,
-		router:      router,
+		nsqd:        nsqd,        // 赋值nsqd对象
+		tlsEnabled:  tlsEnabled,  // 赋值tls配置是否启用
+		tlsRequired: tlsRequired, // 赋值tls证书是否需要验证
+		router:      router,      // 赋值路由对象
 	}
 
-	router.Handle("GET", "/ping", http_api.Decorate(s.pingHandler, log, http_api.PlainText))
-	router.Handle("GET", "/info", http_api.Decorate(s.doInfo, log, http_api.V1))
+	router.Handle("GET", "/ping", http_api.Decorate(s.pingHandler, log, http_api.PlainText)) // 返回nsqd是否正常的心跳通知
+	router.Handle("GET", "/info", http_api.Decorate(s.doInfo, log, http_api.V1))             // 输出客户端可重写的配置信息和nsqd对应的基础信息
 
 	// v1 negotiate
-	router.Handle("POST", "/pub", http_api.Decorate(s.doPUB, http_api.V1))
-	router.Handle("POST", "/mpub", http_api.Decorate(s.doMPUB, http_api.V1))
-	router.Handle("GET", "/stats", http_api.Decorate(s.doStats, log, http_api.V1))
+	router.Handle("POST", "/pub", http_api.Decorate(s.doPUB, http_api.V1))         // 发布单条消息(可通过defer参数设置延迟消息)
+	router.Handle("POST", "/mpub", http_api.Decorate(s.doMPUB, http_api.V1))       // 发布多条消息(仅发布实时消息)
+	router.Handle("GET", "/stats", http_api.Decorate(s.doStats, log, http_api.V1)) // nsqd状态信息获取
 
 	// only v1
-	router.Handle("POST", "/topic/create", http_api.Decorate(s.doCreateTopic, log, http_api.V1))
-	router.Handle("POST", "/topic/delete", http_api.Decorate(s.doDeleteTopic, log, http_api.V1))
-	router.Handle("POST", "/topic/empty", http_api.Decorate(s.doEmptyTopic, log, http_api.V1))
+	router.Handle("POST", "/topic/create", http_api.Decorate(s.doCreateTopic, log, http_api.V1)) // 根据topic名称创建topic对象
+	router.Handle("POST", "/topic/delete", http_api.Decorate(s.doDeleteTopic, log, http_api.V1)) // 根据topic名称删除topic对象
+	router.Handle("POST", "/topic/empty", http_api.Decorate(s.doEmptyTopic, log, http_api.V1))   // 根据topic名称情况topic对象中的所有消息对象
 	router.Handle("POST", "/topic/pause", http_api.Decorate(s.doPauseTopic, log, http_api.V1))
 	router.Handle("POST", "/topic/unpause", http_api.Decorate(s.doPauseTopic, log, http_api.V1))
 	router.Handle("POST", "/channel/create", http_api.Decorate(s.doCreateChannel, log, http_api.V1))
@@ -106,8 +107,9 @@ func freeMemory(w http.ResponseWriter, req *http.Request, ps httprouter.Params) 
 	return nil, nil
 }
 
+// ServeHTTP 实现了http.Handler接口的方法
 func (s *httpServer) ServeHTTP(w http.ResponseWriter, req *http.Request) {
-	if !s.tlsEnabled && s.tlsRequired {
+	if !s.tlsEnabled && s.tlsRequired { // 非https的情况下但需要验证客户端证书则返回证书未设置的错误提示信息
 		resp := fmt.Sprintf(`{"message": "TLS_REQUIRED", "https_port": %d}`,
 			s.nsqd.RealHTTPSAddr().Port)
 		w.Header().Set("X-NSQ-Content-Type", "nsq; version=1.0")
@@ -119,6 +121,7 @@ func (s *httpServer) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	s.router.ServeHTTP(w, req)
 }
 
+// pingHandler 返回nsqd是否正常的心跳通知
 func (s *httpServer) pingHandler(w http.ResponseWriter, req *http.Request, ps httprouter.Params) (interface{}, error) {
 	health := s.nsqd.GetHealth()
 	if !s.nsqd.IsHealthy() {
@@ -127,6 +130,7 @@ func (s *httpServer) pingHandler(w http.ResponseWriter, req *http.Request, ps ht
 	return health, nil
 }
 
+// doInfo 输出客户端可重写的配置信息和nsqd对应的基础信息
 func (s *httpServer) doInfo(w http.ResponseWriter, req *http.Request, ps httprouter.Params) (interface{}, error) {
 	hostname, err := os.Hostname()
 	if err != nil {
@@ -186,6 +190,7 @@ func (s *httpServer) getExistingTopicFromQuery(req *http.Request) (*http_api.Req
 	return reqParams, topic, channelName, err
 }
 
+// getTopicFromQuery 解析参数数据并获取或创建topic对象
 func (s *httpServer) getTopicFromQuery(req *http.Request) (url.Values, *Topic, error) {
 	reqParams, err := url.ParseQuery(req.URL.RawQuery)
 	if err != nil {
@@ -206,33 +211,37 @@ func (s *httpServer) getTopicFromQuery(req *http.Request) (url.Values, *Topic, e
 	return reqParams, s.nsqd.GetTopic(topicName), nil
 }
 
+// doPUB 发布单条消息(可通过defer参数设置延迟消息)
 func (s *httpServer) doPUB(w http.ResponseWriter, req *http.Request, ps httprouter.Params) (interface{}, error) {
 	// TODO: one day I'd really like to just error on chunked requests
 	// to be able to fail "too big" requests before we even read
 
-	if req.ContentLength > s.nsqd.getOpts().MaxMsgSize {
+	if req.ContentLength > s.nsqd.getOpts().MaxMsgSize { // 当请求数据大于接收数据最大长度时返回413错误码(MSG_TOO_BIG)
 		return nil, http_api.Err{Code: 413, Text: "MSG_TOO_BIG"}
 	}
 
-	// add 1 so that it's greater than our max when we test for it
-	// (LimitReader returns a "fake" EOF)
+	// 可能存在实际消息体大小与传入参数ContentLength不符合的情况,所以设置长度多一位用于后面实际长度验证
 	readMax := s.nsqd.getOpts().MaxMsgSize + 1
 	body, err := io.ReadAll(io.LimitReader(req.Body, readMax))
-	if err != nil {
+	if err != nil { // 当读取数据异常时则返回500错误(INTERNAL_ERROR)
 		return nil, http_api.Err{Code: 500, Text: "INTERNAL_ERROR"}
 	}
-	if int64(len(body)) == readMax {
+	if int64(len(body)) == readMax { // 当实际读取到的数据长度大于接收最大长度时返回413错误码(MSG_TOO_BIG)
 		return nil, http_api.Err{Code: 413, Text: "MSG_TOO_BIG"}
 	}
-	if len(body) == 0 {
+	if len(body) == 0 { // 当请求数据为空时返回400错误码(MSG_EMPTY)
 		return nil, http_api.Err{Code: 400, Text: "MSG_EMPTY"}
 	}
 
-	reqParams, topic, err := s.getTopicFromQuery(req)
-	if err != nil {
+	reqParams, topic, err := s.getTopicFromQuery(req) // 解析参数数据并获取或创建topic对象
+	if err != nil {                                   // 参数获取失败则返回400错误码(INVALID_REQUEST)
 		return nil, err
 	}
 
+	// 检查是否发布延迟消息
+	// 1.设置的情况下
+	//	1).如果延迟时间解析异常或在nsqd服务设置范围外则返回400错误码(INVALID_DEFER)
+	//	2).延迟时间在设置范围内则继续下面的流程
 	var deferred time.Duration
 	if ds, ok := reqParams["defer"]; ok {
 		var di int64
@@ -246,16 +255,17 @@ func (s *httpServer) doPUB(w http.ResponseWriter, req *http.Request, ps httprout
 		}
 	}
 
-	msg := NewMessage(topic.GenerateID(), body)
+	msg := NewMessage(topic.GenerateID(), body) // 根据请求的消息体和topic对象生成的id初始化消息对象
 	msg.deferred = deferred
-	err = topic.PutMessage(msg)
-	if err != nil {
+	err = topic.PutMessage(msg) // 向topic的队列中写入一个消息对象
+	if err != nil {             // 客户端连接处于退出状态或写入失败则返回503状态码(EXITING)
 		return nil, http_api.Err{Code: 503, Text: "EXITING"}
 	}
 
 	return "OK", nil
 }
 
+// doMPUB 发布多条消息(仅发布实时消息)
 func (s *httpServer) doMPUB(w http.ResponseWriter, req *http.Request, ps httprouter.Params) (interface{}, error) {
 	var msgs []*Message
 	var exit bool
@@ -263,16 +273,16 @@ func (s *httpServer) doMPUB(w http.ResponseWriter, req *http.Request, ps httprou
 	// TODO: one day I'd really like to just error on chunked requests
 	// to be able to fail "too big" requests before we even read
 
-	if req.ContentLength > s.nsqd.getOpts().MaxBodySize {
+	if req.ContentLength > s.nsqd.getOpts().MaxBodySize { // 当请求数据大于接收数据最大长度时返回413错误码(MSG_TOO_BIG)
 		return nil, http_api.Err{Code: 413, Text: "BODY_TOO_BIG"}
 	}
 
-	reqParams, topic, err := s.getTopicFromQuery(req)
+	reqParams, topic, err := s.getTopicFromQuery(req) // 解析参数数据并获取或创建topic对象
 	if err != nil {
 		return nil, err
 	}
 
-	// text mode is default, but unrecognized binary opt considered true
+	// 默认文本模式,若设置了binary参数则通过字符串转化成bool变量判断是否使用二进制模式,若不在boolParams中则默认启用二进制模式
 	binaryMode := false
 	if vals, ok := reqParams["binary"]; ok {
 		if binaryMode, ok = boolParams[vals[0]]; !ok {
@@ -280,39 +290,39 @@ func (s *httpServer) doMPUB(w http.ResponseWriter, req *http.Request, ps httprou
 			s.nsqd.logf(LOG_WARN, "deprecated value '%s' used for /mpub binary param", vals[0])
 		}
 	}
-	if binaryMode {
+	if binaryMode { // 二进制模式下发布多条任务
 		tmp := make([]byte, 4)
 		msgs, err = readMPUB(req.Body, tmp, topic,
 			s.nsqd.getOpts().MaxMsgSize, s.nsqd.getOpts().MaxBodySize)
 		if err != nil {
 			return nil, http_api.Err{Code: 413, Text: err.(*protocol.FatalClientErr).Code[2:]}
 		}
-	} else {
+	} else { // 文本模式下发布多条任务
 		// add 1 so that it's greater than our max when we test for it
 		// (LimitReader returns a "fake" EOF)
+		// 可能存在实际消息体大小与传入参数ContentLength不符合的情况,所以设置长度多一位用于后面实际长度验证
 		readMax := s.nsqd.getOpts().MaxBodySize + 1
 		rdr := bufio.NewReader(io.LimitReader(req.Body, readMax))
 		total := 0
 		for !exit {
 			var block []byte
-			block, err = rdr.ReadBytes('\n')
-			if err != nil {
-				if err != io.EOF {
+			block, err = rdr.ReadBytes('\n') // 文本方式读取到第一个换行符\n时结束并返回块信息和错误信息
+			if err != nil {                  // 存在错误则判断是否读到最后一条消息,结束符(io.EOF)
+				if err != io.EOF { // 非结束符io.EOF则返回状态码500(INTERNAL_ERROR)
 					return nil, http_api.Err{Code: 500, Text: "INTERNAL_ERROR"}
 				}
 				exit = true
 			}
-			total += len(block)
-			if int64(total) == readMax {
+			total += len(block)          // 读取数据总长度累加
+			if int64(total) == readMax { // 当实际读取到的数据长度大于接收最大长度时返回413错误码(BODY_TOO_BIG)
 				return nil, http_api.Err{Code: 413, Text: "BODY_TOO_BIG"}
 			}
 
 			if len(block) > 0 && block[len(block)-1] == '\n' {
-				block = block[:len(block)-1]
+				block = block[:len(block)-1] // 切割字符串末尾的换行符\n
 			}
 
-			// silently discard 0 length messages
-			// this maintains the behavior pre 0.2.22
+			// 默默地丢弃0长度的消息，这保持了0.2.22之前的行为。
 			if len(block) == 0 {
 				continue
 			}
@@ -334,11 +344,13 @@ func (s *httpServer) doMPUB(w http.ResponseWriter, req *http.Request, ps httprou
 	return "OK", nil
 }
 
+// doCreateTopic 根据topic名称创建topic对象
 func (s *httpServer) doCreateTopic(w http.ResponseWriter, req *http.Request, ps httprouter.Params) (interface{}, error) {
 	_, _, err := s.getTopicFromQuery(req)
 	return nil, err
 }
 
+// doEmptyTopic 根据topic名称情况topic对象中的所有消息对象
 func (s *httpServer) doEmptyTopic(w http.ResponseWriter, req *http.Request, ps httprouter.Params) (interface{}, error) {
 	reqParams, err := http_api.NewReqParams(req)
 	if err != nil {
@@ -368,6 +380,7 @@ func (s *httpServer) doEmptyTopic(w http.ResponseWriter, req *http.Request, ps h
 	return nil, nil
 }
 
+// doDeleteTopic 根据topic名称删除topic对象
 func (s *httpServer) doDeleteTopic(w http.ResponseWriter, req *http.Request, ps httprouter.Params) (interface{}, error) {
 	reqParams, err := http_api.NewReqParams(req)
 	if err != nil {
@@ -388,6 +401,7 @@ func (s *httpServer) doDeleteTopic(w http.ResponseWriter, req *http.Request, ps 
 	return nil, nil
 }
 
+// doPauseTopic 根据topic名称暂停或启动向所有channel分发消息
 func (s *httpServer) doPauseTopic(w http.ResponseWriter, req *http.Request, ps httprouter.Params) (interface{}, error) {
 	reqParams, err := http_api.NewReqParams(req)
 	if err != nil {
@@ -492,6 +506,13 @@ func (s *httpServer) doPauseChannel(w http.ResponseWriter, req *http.Request, ps
 	return nil, nil
 }
 
+// doStats nsqd状态信息获取,可设置参数包含
+//
+//	1.format: 格式化方式(text|json)
+//	2.topic: 获取的topic
+//	3.channel: 获取的channel
+//	4.include_clients: 是否需要获取对应channel的客户端信息
+//	5.include_mem: 是否需要获取nsqd对象的内存和堆栈等信息
 func (s *httpServer) doStats(w http.ResponseWriter, req *http.Request, ps httprouter.Params) (interface{}, error) {
 	reqParams, err := http_api.NewReqParams(req)
 	if err != nil {

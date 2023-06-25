@@ -193,7 +193,7 @@ func (t *Topic) PutMessage(m *Message) error {
 	return nil
 }
 
-// PutMessages writes multiple Messages to the queue
+// PutMessages 向队列中写入多个消息对象
 func (t *Topic) PutMessages(msgs []*Message) error {
 	t.RLock()
 	defer t.RUnlock()
@@ -382,7 +382,7 @@ func (t *Topic) exit(deleted bool) error {
 		}
 		t.Unlock()
 
-		// empty the queue (deletes the backend files, too)
+		// 清空topic对应的消息队列（同时删除磁盘文件）。
 		t.Empty()
 		return t.backend.Delete()
 	}
@@ -403,6 +403,7 @@ func (t *Topic) exit(deleted bool) error {
 	return t.backend.Close()
 }
 
+// Empty 情况topic对象的所有消息(内存通道和磁盘队列)
 func (t *Topic) Empty() error {
 	for {
 		select {

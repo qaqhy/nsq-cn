@@ -985,7 +985,7 @@ func (p *protocolV2) TOUCH(client *clientV2, params [][]byte) ([]byte, error) {
 	return nil, nil
 }
 
-// readMPUB 从读取流r中读取所有的消息体对象
+// readMPUB 从读取流r中读取所有的消息体并生成消息对象列表返回
 func readMPUB(r io.Reader, tmp []byte, topic *Topic, maxMessageSize int64, maxBodySize int64) ([]*Message, error) {
 	numMessages, err := readLen(r, tmp) // 从读取流r中的前4字节解析并获取消息体的个数
 	if err != nil {
