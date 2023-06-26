@@ -74,8 +74,8 @@ func newHTTPServer(nsqd *NSQD, tlsEnabled bool, tlsRequired bool) *httpServer {
 	router.Handle("POST", "/channel/empty", http_api.Decorate(s.doEmptyChannel, log, http_api.V1))   // 如果指定topic对象存在且channel对象也存在的情况下执行channel对象的清空逻辑
 	router.Handle("POST", "/channel/pause", http_api.Decorate(s.doPauseChannel, log, http_api.V1))   // 如果指定topic对象存在且channel对象也存在的情况下暂停向所有客户端对象分发消息
 	router.Handle("POST", "/channel/unpause", http_api.Decorate(s.doPauseChannel, log, http_api.V1)) // 如果指定topic对象存在且channel对象也存在的情况下启动向所有客户端对象分发消息
-	router.Handle("GET", "/config/:opt", http_api.Decorate(s.doConfig, log, http_api.V1))            // 获取对应的配置信息
-	router.Handle("PUT", "/config/:opt", http_api.Decorate(s.doConfig, log, http_api.V1))            // 更新配置(仅nsqlookupd_tcp_addresses和log_level)并获取更新后的此配置信息
+	router.Handle("GET", "/config/:opt", http_api.Decorate(s.doConfig, log, http_api.V1))            // :opt参数必须转化为下划线否则不会被识别到,获取对应的配置信息
+	router.Handle("PUT", "/config/:opt", http_api.Decorate(s.doConfig, log, http_api.V1))            // :opt参数必须转化为下划线否则不会被识别到,更新配置(仅nsqlookupd_tcp_addresses和log_level)并获取更新后的此配置信息
 
 	// debug
 	router.HandlerFunc("GET", "/debug/pprof/", pprof.Index)
