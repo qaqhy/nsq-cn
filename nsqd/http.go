@@ -64,18 +64,18 @@ func newHTTPServer(nsqd *NSQD, tlsEnabled bool, tlsRequired bool) *httpServer {
 	router.Handle("GET", "/stats", http_api.Decorate(s.doStats, log, http_api.V1)) // nsqd状态信息获取
 
 	// only v1
-	router.Handle("POST", "/topic/create", http_api.Decorate(s.doCreateTopic, log, http_api.V1)) // 根据topic名称创建topic对象
-	router.Handle("POST", "/topic/delete", http_api.Decorate(s.doDeleteTopic, log, http_api.V1)) // 根据topic名称删除topic对象
-	router.Handle("POST", "/topic/empty", http_api.Decorate(s.doEmptyTopic, log, http_api.V1))   // 根据topic名称情况topic对象中的所有消息对象
-	router.Handle("POST", "/topic/pause", http_api.Decorate(s.doPauseTopic, log, http_api.V1))   // 根据topic名称暂停向所有channel分发消息
-	router.Handle("POST", "/topic/unpause", http_api.Decorate(s.doPauseTopic, log, http_api.V1)) // 根据topic名称启动向所有channel分发消息
-	router.Handle("POST", "/channel/create", http_api.Decorate(s.doCreateChannel, log, http_api.V1))
-	router.Handle("POST", "/channel/delete", http_api.Decorate(s.doDeleteChannel, log, http_api.V1))
-	router.Handle("POST", "/channel/empty", http_api.Decorate(s.doEmptyChannel, log, http_api.V1))
-	router.Handle("POST", "/channel/pause", http_api.Decorate(s.doPauseChannel, log, http_api.V1))
-	router.Handle("POST", "/channel/unpause", http_api.Decorate(s.doPauseChannel, log, http_api.V1))
-	router.Handle("GET", "/config/:opt", http_api.Decorate(s.doConfig, log, http_api.V1))
-	router.Handle("PUT", "/config/:opt", http_api.Decorate(s.doConfig, log, http_api.V1))
+	router.Handle("POST", "/topic/create", http_api.Decorate(s.doCreateTopic, log, http_api.V1))     // 根据topic名称创建topic对象
+	router.Handle("POST", "/topic/delete", http_api.Decorate(s.doDeleteTopic, log, http_api.V1))     // 根据topic名称删除topic对象
+	router.Handle("POST", "/topic/empty", http_api.Decorate(s.doEmptyTopic, log, http_api.V1))       // 根据topic名称情况topic对象中的所有消息对象
+	router.Handle("POST", "/topic/pause", http_api.Decorate(s.doPauseTopic, log, http_api.V1))       // 根据topic名称暂停向所有channel分发消息
+	router.Handle("POST", "/topic/unpause", http_api.Decorate(s.doPauseTopic, log, http_api.V1))     // 根据topic名称启动向所有channel分发消息
+	router.Handle("POST", "/channel/create", http_api.Decorate(s.doCreateChannel, log, http_api.V1)) // topic存在的情况下创建channel对象
+	router.Handle("POST", "/channel/delete", http_api.Decorate(s.doDeleteChannel, log, http_api.V1)) // 如果指定topic对象存在且channel对象也存在的情况下执行channel对象的删除逻辑
+	router.Handle("POST", "/channel/empty", http_api.Decorate(s.doEmptyChannel, log, http_api.V1))   // 如果指定topic对象存在且channel对象也存在的情况下执行channel对象的清空逻辑
+	router.Handle("POST", "/channel/pause", http_api.Decorate(s.doPauseChannel, log, http_api.V1))   // 如果指定topic对象存在且channel对象也存在的情况下暂停向所有客户端对象分发消息
+	router.Handle("POST", "/channel/unpause", http_api.Decorate(s.doPauseChannel, log, http_api.V1)) // 如果指定topic对象存在且channel对象也存在的情况下启动向所有客户端对象分发消息
+	router.Handle("GET", "/config/:opt", http_api.Decorate(s.doConfig, log, http_api.V1))            // 获取所有的配置信息
+	router.Handle("PUT", "/config/:opt", http_api.Decorate(s.doConfig, log, http_api.V1))            // 更新配置(仅nsqlookupd_tcp_addresses和log_level)并获取更新结果后的所有配置信息
 
 	// debug
 	router.HandlerFunc("GET", "/debug/pprof/", pprof.Index)
@@ -170,6 +170,7 @@ func (s *httpServer) doInfo(w http.ResponseWriter, req *http.Request, ps httprou
 	}, nil
 }
 
+// getExistingTopicFromQuery 获取topic和channel名字并查询topic是否存在,存在的情况下返回topic对象和channel名称等信息
 func (s *httpServer) getExistingTopicFromQuery(req *http.Request) (*http_api.ReqParams, *Topic, string, error) {
 	reqParams, err := http_api.NewReqParams(req)
 	if err != nil {
@@ -436,6 +437,7 @@ func (s *httpServer) doPauseTopic(w http.ResponseWriter, req *http.Request, ps h
 	return nil, nil
 }
 
+// doCreateChannel topic存在的情况下创建channel对象
 func (s *httpServer) doCreateChannel(w http.ResponseWriter, req *http.Request, ps httprouter.Params) (interface{}, error) {
 	_, topic, channelName, err := s.getExistingTopicFromQuery(req)
 	if err != nil {
@@ -445,6 +447,7 @@ func (s *httpServer) doCreateChannel(w http.ResponseWriter, req *http.Request, p
 	return nil, nil
 }
 
+// doEmptyChannel 如果指定topic对象存在且channel对象也存在的情况下执行channel对象的清空逻辑
 func (s *httpServer) doEmptyChannel(w http.ResponseWriter, req *http.Request, ps httprouter.Params) (interface{}, error) {
 	_, topic, channelName, err := s.getExistingTopicFromQuery(req)
 	if err != nil {
@@ -464,6 +467,7 @@ func (s *httpServer) doEmptyChannel(w http.ResponseWriter, req *http.Request, ps
 	return nil, nil
 }
 
+// doDeleteChannel 如果指定topic对象存在且channel对象也存在的情况下执行channel对象的删除逻辑
 func (s *httpServer) doDeleteChannel(w http.ResponseWriter, req *http.Request, ps httprouter.Params) (interface{}, error) {
 	_, topic, channelName, err := s.getExistingTopicFromQuery(req)
 	if err != nil {
@@ -478,6 +482,7 @@ func (s *httpServer) doDeleteChannel(w http.ResponseWriter, req *http.Request, p
 	return nil, nil
 }
 
+// doPauseChannel 如果指定topic对象存在且channel对象也存在的情况下暂停或启动向所有客户端对象分发消息
 func (s *httpServer) doPauseChannel(w http.ResponseWriter, req *http.Request, ps httprouter.Params) (interface{}, error) {
 	_, topic, channelName, err := s.getExistingTopicFromQuery(req)
 	if err != nil {
@@ -499,7 +504,7 @@ func (s *httpServer) doPauseChannel(w http.ResponseWriter, req *http.Request, ps
 		return nil, http_api.Err{Code: 500, Text: "INTERNAL_ERROR"}
 	}
 
-	// 主动持久化元数据，以便在进程失败的情况下，nsqd不会突然（取消）暂停通道channel
+	// 主动持久化元数据，以便在进程失败的情况下，nsqd不会突然（取消）暂停频道channel
 	s.nsqd.Lock()
 	s.nsqd.PersistMetadata()
 	s.nsqd.Unlock()
@@ -640,6 +645,7 @@ func (s *httpServer) printStats(stats Stats, ms *memStats, health string, startT
 	return buf.Bytes()
 }
 
+// doConfig 更新配置(仅nsqlookupd_tcp_addresses和log_level)或获取所有的配置信息
 func (s *httpServer) doConfig(w http.ResponseWriter, req *http.Request, ps httprouter.Params) (interface{}, error) {
 	opt := ps.ByName("opt")
 

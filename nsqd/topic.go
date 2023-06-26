@@ -91,21 +91,19 @@ func (t *Topic) Start() {
 	}
 }
 
-// Exiting returns a boolean indicating if this topic is closed/exiting
+// Exiting 返回一个布尔值，表示该主题topic是否关闭/退出。
 func (t *Topic) Exiting() bool {
 	return atomic.LoadInt32(&t.exitFlag) == 1
 }
 
-// GetChannel performs a thread safe operation
-// to return a pointer to a Channel object (potentially new)
-// for the given Topic
+// GetChannel 执行一个线程安全的操作，为给定的主题topic返回一个指向channel对象的指针（可能是新的）。
 func (t *Topic) GetChannel(channelName string) *Channel {
 	t.Lock()
 	channel, isNew := t.getOrCreateChannel(channelName)
 	t.Unlock()
 
 	if isNew {
-		// update messagePump state
+		// 通知消息泵重新解析channelMap,更新此topic的channel列表
 		select {
 		case t.channelUpdateChan <- 1:
 		case <-t.exitChan:
@@ -115,7 +113,7 @@ func (t *Topic) GetChannel(channelName string) *Channel {
 	return channel
 }
 
-// this expects the caller to handle locking
+// getOrCreateChannel 获取channel对象的指针,若不存在则创建并增加到topic的channelMap中
 func (t *Topic) getOrCreateChannel(channelName string) (*Channel, bool) {
 	channel, ok := t.channelMap[channelName]
 	if !ok {
@@ -130,6 +128,7 @@ func (t *Topic) getOrCreateChannel(channelName string) (*Channel, bool) {
 	return channel, false
 }
 
+// GetExistingChannel 若channel对象存在则返回channel对象的指针
 func (t *Topic) GetExistingChannel(channelName string) (*Channel, error) {
 	t.RLock()
 	defer t.RUnlock()
@@ -140,7 +139,7 @@ func (t *Topic) GetExistingChannel(channelName string) (*Channel, error) {
 	return channel, nil
 }
 
-// DeleteExistingChannel removes a channel from the topic only if it exists
+// DeleteExistingChannel 只有在此频道channel存在的情况下才会从主题topic中移除它
 func (t *Topic) DeleteExistingChannel(channelName string) error {
 	t.RLock()
 	channel, ok := t.channelMap[channelName]
@@ -151,12 +150,8 @@ func (t *Topic) DeleteExistingChannel(channelName string) error {
 
 	t.nsqd.logf(LOG_INFO, "TOPIC(%s): deleting channel %s", t.name, channel.name)
 
-	// delete empties the channel before closing
-	// (so that we dont leave any messages around)
-	//
-	// we do this before removing the channel from map below (with no lock)
-	// so that any incoming subs will error and not create a new channel
-	// to enforce ordering
+	// 删除频道channel后,我们不会留下任何相关数据
+	// 我们在channelMap对象中删除频道channel之前做channel.Delete()这件事(没有锁),才能保证关联的子系统不会出错,也不会创建一个新的通道来执行排序
 	channel.Delete()
 
 	t.Lock()
@@ -164,13 +159,13 @@ func (t *Topic) DeleteExistingChannel(channelName string) error {
 	numChannels := len(t.channelMap)
 	t.Unlock()
 
-	// update messagePump state
+	// 更新消息泵状态,通知消息泵重新解析channelMap,更新此topic的channel列表
 	select {
 	case t.channelUpdateChan <- 1:
 	case <-t.exitChan:
 	}
 
-	if numChannels == 0 && t.ephemeral {
+	if numChannels == 0 && t.ephemeral { // 如果此topic下没有频道channel对象且是临时的topic则执行删除回调方法
 		go t.deleter.Do(func() { t.deleteCallback(t) })
 	}
 
