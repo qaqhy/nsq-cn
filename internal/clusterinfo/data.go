@@ -117,8 +117,7 @@ func (c *ClusterInfo) GetLookupdTopics(lookupdHTTPAddrs []string) ([]string, err
 	return topics, nil
 }
 
-// GetLookupdTopicChannels returns a []string containing a union of all the channels
-// from all the given lookupd for the given topic
+// GetLookupdTopicChannels 返回一个[]string,其中包含来自所有给定主题Topic的服务发现lookupd的所有频道channel的集合。
 func (c *ClusterInfo) GetLookupdTopicChannels(topic string, lookupdHTTPAddrs []string) ([]string, error) {
 	var channels []string
 	var lock sync.Mutex
@@ -139,7 +138,7 @@ func (c *ClusterInfo) GetLookupdTopicChannels(topic string, lookupdHTTPAddrs []s
 
 			var resp respType
 			err := c.client.GETV1(endpoint, &resp)
-			if err != nil {
+			if err != nil { // 服务发现可能给的是主机名,会出现访问异常的问题,则不会同步信息(不是致命错误)
 				lock.Lock()
 				errs = append(errs, err)
 				lock.Unlock()

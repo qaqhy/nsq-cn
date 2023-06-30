@@ -34,20 +34,20 @@ type peerInfo struct {
 	BroadcastAddress string `json:"broadcast_address"`
 }
 
-// newLookupPeer creates a new lookupPeer instance connecting to the supplied address.
+// newLookupPeer 创建一个新的lookupPeer实例，连接到提供的地址。
 //
-// The supplied connectCallback will be called *every* time the instance connects.
+// 提供的connectCallback方法将在实例每次连接时被调用。
 func newLookupPeer(addr string, maxBodySize int64, l lg.AppLogFunc, connectCallback func(*lookupPeer)) *lookupPeer {
 	return &lookupPeer{
 		logf:            l,
 		addr:            addr,
-		state:           stateDisconnected,
+		state:           stateDisconnected, // 初始化未断开连接状态
 		maxBodySize:     maxBodySize,
 		connectCallback: connectCallback,
 	}
 }
 
-// Connect will Dial the specified address, with timeouts
+// 连接将拨打指定的地址并有设置最长超时时间为1秒。
 func (lp *lookupPeer) Connect() error {
 	lp.logf(lg.INFO, "LOOKUP connecting to %s", lp.addr)
 	conn, err := net.DialTimeout("tcp", lp.addr, time.Second)
@@ -75,7 +75,7 @@ func (lp *lookupPeer) Write(data []byte) (int, error) {
 	return lp.conn.Write(data)
 }
 
-// Close implements the io.Closer interface
+// Close 关闭连接对象并设置为断开连接状态
 func (lp *lookupPeer) Close() error {
 	lp.state = stateDisconnected
 	if lp.conn != nil {
@@ -92,33 +92,33 @@ func (lp *lookupPeer) Close() error {
 // It returns the response from nsqlookupd as []byte
 func (lp *lookupPeer) Command(cmd *nsq.Command) ([]byte, error) {
 	initialState := lp.state
-	if lp.state != stateConnected {
-		err := lp.Connect()
+	if lp.state != stateConnected { // 非连接状态则执行以下流程
+		err := lp.Connect() // 初始化连接对象
 		if err != nil {
 			return nil, err
 		}
-		lp.state = stateConnected
+		lp.state = stateConnected // 更新状态为连接状态
 		_, err = lp.Write(nsq.MagicV1)
 		if err != nil {
 			lp.Close()
 			return nil, err
 		}
-		if initialState == stateDisconnected {
+		if initialState == stateDisconnected { // 如果是断开连接状态则同步此nsqd服务上所有的topic和channel信息到此服务发现上
 			lp.connectCallback(lp)
 		}
-		if lp.state != stateConnected {
+		if lp.state != stateConnected { // 如果连接状态非连接状态则返回错误信息
 			return nil, fmt.Errorf("lookupPeer connectCallback() failed")
 		}
 	}
-	if cmd == nil {
+	if cmd == nil { // 空命令下则直接返回
 		return nil, nil
 	}
-	_, err := cmd.WriteTo(lp)
+	_, err := cmd.WriteTo(lp) // 将命令内容写到lp流中
 	if err != nil {
 		lp.Close()
 		return nil, err
 	}
-	resp, err := readResponseBounded(lp, lp.maxBodySize)
+	resp, err := readResponseBounded(lp, lp.maxBodySize) // 读取流返回数据
 	if err != nil {
 		lp.Close()
 		return nil, err
@@ -129,20 +129,20 @@ func (lp *lookupPeer) Command(cmd *nsq.Command) ([]byte, error) {
 func readResponseBounded(r io.Reader, limit int64) ([]byte, error) {
 	var msgSize int32
 
-	// message size
+	// 大端方式读取消息的长度
 	err := binary.Read(r, binary.BigEndian, &msgSize)
 	if err != nil {
 		return nil, err
 	}
 
-	if int64(msgSize) > limit {
+	if int64(msgSize) > limit { // 内容大小超过限制则返回错误信息
 		return nil, fmt.Errorf("response body size (%d) is greater than limit (%d)",
 			msgSize, limit)
 	}
 
-	// message binary data
+	// 二进制消息数据
 	buf := make([]byte, msgSize)
-	_, err = io.ReadFull(r, buf)
+	_, err = io.ReadFull(r, buf) // 读取所有的数据到buf对象中
 	if err != nil {
 		return nil, err
 	}

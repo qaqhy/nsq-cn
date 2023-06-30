@@ -26,22 +26,22 @@ type NSQLookupd struct {
 func New(opts *Options) (*NSQLookupd, error) {
 	var err error
 
-	if opts.Logger == nil {
+	if opts.Logger == nil { // 日志对象不存在时则初始化
 		opts.Logger = log.New(os.Stderr, opts.LogPrefix, log.Ldate|log.Ltime|log.Lmicroseconds)
 	}
 	l := &NSQLookupd{
 		opts: opts,
-		DB:   NewRegistrationDB(),
+		DB:   NewRegistrationDB(), // 初始化注册关系DB对象
 	}
 
 	l.logf(LOG_INFO, version.String("nsqlookupd"))
 
-	l.tcpServer = &tcpServer{nsqlookupd: l}
-	l.tcpListener, err = net.Listen("tcp", opts.TCPAddress)
+	l.tcpServer = &tcpServer{nsqlookupd: l}                 // 初始化tcpServer对象
+	l.tcpListener, err = net.Listen("tcp", opts.TCPAddress) // 初始化tcpListener对象
 	if err != nil {
 		return nil, fmt.Errorf("listen (%s) failed - %s", opts.TCPAddress, err)
 	}
-	l.httpListener, err = net.Listen("tcp", opts.HTTPAddress)
+	l.httpListener, err = net.Listen("tcp", opts.HTTPAddress) // 初始化httpListener对象
 	if err != nil {
 		return nil, fmt.Errorf("listen (%s) failed - %s", opts.HTTPAddress, err)
 	}
@@ -49,8 +49,7 @@ func New(opts *Options) (*NSQLookupd, error) {
 	return l, nil
 }
 
-// Main starts an instance of nsqlookupd and returns an
-// error if there was a problem starting up.
+// 主程序启动一个nsqlookupd的实例，如果启动有问题，则返回一个错误。
 func (l *NSQLookupd) Main() error {
 	exitCh := make(chan error)
 	var once sync.Once
@@ -63,15 +62,15 @@ func (l *NSQLookupd) Main() error {
 		})
 	}
 
-	l.waitGroup.Wrap(func() {
+	l.waitGroup.Wrap(func() { // ***重点：协程方式启动nsqd的TCP服务
 		exitFunc(protocol.TCPServer(l.tcpListener, l.tcpServer, l.logf))
 	})
 	httpServer := newHTTPServer(l)
-	l.waitGroup.Wrap(func() {
+	l.waitGroup.Wrap(func() { // ***重点：协程方式启动nsqd的HTTP服务
 		exitFunc(http_api.Serve(l.httpListener, httpServer, "HTTP", l.logf))
 	})
 
-	err := <-exitCh
+	err := <-exitCh // 等待退出信号
 	return err
 }
 
@@ -83,6 +82,7 @@ func (l *NSQLookupd) RealHTTPAddr() *net.TCPAddr {
 	return l.httpListener.Addr().(*net.TCPAddr)
 }
 
+// Exit 优雅退出,关闭资源
 func (l *NSQLookupd) Exit() {
 	if l.tcpListener != nil {
 		l.tcpListener.Close()

@@ -12,6 +12,7 @@ import (
 	"github.com/nsqio/nsq/internal/version"
 )
 
+// connectCallback 连接回调方法,集成服务发现交互的鉴权和nsqd信息的注册方法
 func connectCallback(n *NSQD, hostname string) func(*lookupPeer) {
 	return func(lp *lookupPeer) {
 		ci := make(map[string]interface{})
@@ -21,34 +22,34 @@ func connectCallback(n *NSQD, hostname string) func(*lookupPeer) {
 		ci["hostname"] = hostname
 		ci["broadcast_address"] = n.getOpts().BroadcastAddress
 
-		cmd, err := nsq.Identify(ci)
+		cmd, err := nsq.Identify(ci) // 初始化鉴权命令对象
 		if err != nil {
 			lp.Close()
 			return
 		}
 
-		resp, err := lp.Command(cmd)
+		resp, err := lp.Command(cmd) // 开始鉴权同步信息
 		if err != nil {
 			n.logf(LOG_ERROR, "LOOKUPD(%s): %s - %s", lp, cmd, err)
 			return
-		} else if bytes.Equal(resp, []byte("E_INVALID")) {
+		} else if bytes.Equal(resp, []byte("E_INVALID")) { // 同步异常则关闭此服务发现客户端连接对象
 			n.logf(LOG_INFO, "LOOKUPD(%s): lookupd returned %s", lp, resp)
 			lp.Close()
 			return
 		}
 
-		err = json.Unmarshal(resp, &lp.Info)
+		err = json.Unmarshal(resp, &lp.Info) // 同步服务端返回信息
 		if err != nil {
 			n.logf(LOG_ERROR, "LOOKUPD(%s): parsing response - %s", lp, resp)
 			lp.Close()
 			return
 		}
 		n.logf(LOG_INFO, "LOOKUPD(%s): peer info %+v", lp, lp.Info)
-		if lp.Info.BroadcastAddress == "" {
+		if lp.Info.BroadcastAddress == "" { // 连接的服务发现未返回地址信息则打印错误信息
 			n.logf(LOG_ERROR, "LOOKUPD(%s): no broadcast address", lp)
 		}
 
-		// build all the commands first so we exit the lock(s) as fast as possible
+		// 首先构建所有topic和channel的注册命令,以便我们尽可能快地退出锁
 		var commands []*nsq.Command
 		n.RLock()
 		for _, topic := range n.topicMap {
@@ -64,7 +65,7 @@ func connectCallback(n *NSQD, hostname string) func(*lookupPeer) {
 		}
 		n.RUnlock()
 
-		for _, cmd := range commands {
+		for _, cmd := range commands { // 执行所有的注册命令
 			n.logf(LOG_INFO, "LOOKUPD(%s): %s", lp, cmd)
 			_, err := lp.Command(cmd)
 			if err != nil {
@@ -75,9 +76,10 @@ func connectCallback(n *NSQD, hostname string) func(*lookupPeer) {
 	}
 }
 
+// lookupLoop nsq的服务发现同步
 func (n *NSQD) lookupLoop() {
-	var lookupPeers []*lookupPeer
-	var lookupAddrs []string
+	var lookupPeers []*lookupPeer // 服务发现服务器列表
+	var lookupAddrs []string      // 服务发现服务器地址列表
 	connect := true
 
 	hostname, err := os.Hostname()
@@ -87,28 +89,28 @@ func (n *NSQD) lookupLoop() {
 	}
 
 	// for announcements, lookupd determines the host automatically
-	ticker := time.NewTicker(15 * time.Second)
+	ticker := time.NewTicker(15 * time.Second) // 初始化心跳定时器,周期（15秒）发送心跳信息
 	defer ticker.Stop()
 	for {
 		if connect {
 			for _, host := range n.getOpts().NSQLookupdTCPAddresses {
-				if in(host, lookupAddrs) {
+				if in(host, lookupAddrs) { // 存在老列表中的忽略
 					continue
 				}
 				n.logf(LOG_INFO, "LOOKUP(%s): adding peer", host)
 				lookupPeer := newLookupPeer(host, n.getOpts().MaxBodySize, n.logf,
 					connectCallback(n, hostname))
-				lookupPeer.Command(nil) // start the connection
+				lookupPeer.Command(nil) // 执行空命令,如果非连接状态则开始Identify鉴权并修改为连接状态,然后同步此nsqd服务上所有的topic和channel信息到此服务发现上
 				lookupPeers = append(lookupPeers, lookupPeer)
 				lookupAddrs = append(lookupAddrs, host)
 			}
-			n.lookupPeers.Store(lookupPeers)
+			n.lookupPeers.Store(lookupPeers) // 更新lookupPeers服务发现列表到原子数据lookupPeers中
 			connect = false
 		}
 
 		select {
 		case <-ticker.C:
-			// send a heartbeat and read a response (read detects closed conns)
+			// 发送心跳并读取响应（读取检测到关闭的连接）
 			for _, lookupPeer := range lookupPeers {
 				n.logf(LOG_DEBUG, "LOOKUPD(%s): sending heartbeat", lookupPeer)
 				cmd := nsq.Ping()
@@ -149,21 +151,21 @@ func (n *NSQD) lookupLoop() {
 					n.logf(LOG_ERROR, "LOOKUPD(%s): %s - %s", lookupPeer, cmd, err)
 				}
 			}
-		case <-n.optsNotificationChan:
+		case <-n.optsNotificationChan: // 收到服务发现列表数据更新通知执行下面逻辑
 			var tmpPeers []*lookupPeer
 			var tmpAddrs []string
-			for _, lp := range lookupPeers {
+			for _, lp := range lookupPeers { // 老列表中若存在则直接加入到新列表中
 				if in(lp.addr, n.getOpts().NSQLookupdTCPAddresses) {
 					tmpPeers = append(tmpPeers, lp)
 					tmpAddrs = append(tmpAddrs, lp.addr)
 					continue
 				}
 				n.logf(LOG_INFO, "LOOKUP(%s): removing peer", lp)
-				lp.Close()
+				lp.Close() // 删除的服务发现地址则关闭对应客户端对象
 			}
 			lookupPeers = tmpPeers
 			lookupAddrs = tmpAddrs
-			connect = true
+			connect = true // 标记下次重新更新一次服务器对象列表
 		case <-n.exitChan:
 			goto exit
 		}
@@ -182,6 +184,7 @@ func in(s string, lst []string) bool {
 	return false
 }
 
+// lookupdHTTPAddrs 更新服务发现的所有HTTP地址列表(IPv4或IPv6)
 func (n *NSQD) lookupdHTTPAddrs() []string {
 	var lookupHTTPAddrs []string
 	lookupPeers := n.lookupPeers.Load()
@@ -192,7 +195,7 @@ func (n *NSQD) lookupdHTTPAddrs() []string {
 		if len(lp.Info.BroadcastAddress) <= 0 {
 			continue
 		}
-		addr := net.JoinHostPort(lp.Info.BroadcastAddress, strconv.Itoa(lp.Info.HTTPPort))
+		addr := net.JoinHostPort(lp.Info.BroadcastAddress, strconv.Itoa(lp.Info.HTTPPort)) // 拼接地址和端口信息(IPv4或IPv6)
 		lookupHTTPAddrs = append(lookupHTTPAddrs, addr)
 	}
 	return lookupHTTPAddrs

@@ -17,24 +17,25 @@ type httpServer struct {
 	router     http.Handler
 }
 
+// newHTTPServer 初始化httpServer结构体对象
 func newHTTPServer(l *NSQLookupd) *httpServer {
-	log := http_api.Log(l.logf)
+	log := http_api.Log(l.logf) // 初始化日志对象,通过此对象包装的方法会统计打印消耗时间信息
 
-	router := httprouter.New()
-	router.HandleMethodNotAllowed = true
-	router.PanicHandler = http_api.LogPanicHandler(l.logf)
-	router.NotFound = http_api.LogNotFoundHandler(l.logf)
-	router.MethodNotAllowed = http_api.LogMethodNotAllowedHandler(l.logf)
+	router := httprouter.New()                                            // 初始化路由对象
+	router.HandleMethodNotAllowed = true                                  // 如果启用，路由器会检查当前路由是否会被其他方法处理，如果当前请求无法被路由将以'Method Not Allowed'和HTTP状态码405来回答。如果没启用，该请求将被委托给NotFound处理程序。
+	router.PanicHandler = http_api.LogPanicHandler(l.logf)                // 初始化恐慌处理方法,处理从http处理程序恢复的恐慌的函数。它应该被用来生成一个错误页面并返回http错误代码500（内部服务器错误）。该处理程序可以用来防止你的服务器因为未恢复的恐慌而崩溃。
+	router.NotFound = http_api.LogNotFoundHandler(l.logf)                 // 可配置的http.Handler，当没有找到匹配的路由时被调用。如果它没有被设置，则使用http.NotFound。
+	router.MethodNotAllowed = http_api.LogMethodNotAllowedHandler(l.logf) // 可配置的http.Handler，当一个请求不能被路由且HandleMethodNotAllowed为真时，它被调用。如果没有设置，则使用http.Error和http.StatusMethodNotAllowed。在处理程序被调用之前，允许请求方法的 "Allow "头被设置。
 	s := &httpServer{
-		nsqlookupd: l,
-		router:     router,
+		nsqlookupd: l,      // 赋值nsqlookupd对象
+		router:     router, // 赋值路由对象
 	}
 
-	router.Handle("GET", "/ping", http_api.Decorate(s.pingHandler, log, http_api.PlainText))
-	router.Handle("GET", "/info", http_api.Decorate(s.doInfo, log, http_api.V1))
+	router.Handle("GET", "/ping", http_api.Decorate(s.pingHandler, log, http_api.PlainText)) // 返回OK
+	router.Handle("GET", "/info", http_api.Decorate(s.doInfo, log, http_api.V1))             // 返回nsqlookupd版本信息
 
 	// v1 negotiate
-	router.Handle("GET", "/debug", http_api.Decorate(s.doDebug, log, http_api.V1))
+	router.Handle("GET", "/debug", http_api.Decorate(s.doDebug, log, http_api.V1)) // 返回注册关系DB对象的所有数据
 	router.Handle("GET", "/lookup", http_api.Decorate(s.doLookup, log, http_api.V1))
 	router.Handle("GET", "/topics", http_api.Decorate(s.doTopics, log, http_api.V1))
 	router.Handle("GET", "/channels", http_api.Decorate(s.doChannels, log, http_api.V1))
@@ -69,6 +70,7 @@ func (s *httpServer) pingHandler(w http.ResponseWriter, req *http.Request, ps ht
 	return "OK", nil
 }
 
+// doInfo 返回nsqlookupd版本信息
 func (s *httpServer) doInfo(w http.ResponseWriter, req *http.Request, ps httprouter.Params) (interface{}, error) {
 	return struct {
 		Version string `json:"version"`
@@ -303,6 +305,7 @@ func (s *httpServer) doNodes(w http.ResponseWriter, req *http.Request, ps httpro
 	}, nil
 }
 
+// doDebug 返回注册关系DB对象的所有数据
 func (s *httpServer) doDebug(w http.ResponseWriter, req *http.Request, ps httprouter.Params) (interface{}, error) {
 	s.nsqlookupd.DB.RLock()
 	defer s.nsqlookupd.DB.RUnlock()
