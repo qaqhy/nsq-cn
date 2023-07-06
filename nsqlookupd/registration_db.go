@@ -47,11 +47,13 @@ func (p *Producer) String() string {
 	return fmt.Sprintf("%s [%d, %d]", p.peerInfo.BroadcastAddress, p.peerInfo.TCPPort, p.peerInfo.HTTPPort)
 }
 
+// Tombstone 标记此生产者对象不可用或已删除并设置标记时间
 func (p *Producer) Tombstone() {
 	p.tombstoned = true
 	p.tombstonedAt = time.Now()
 }
 
+// IsTombstoned 判断此生产者对象是否被标记为不可用且未到达超时时间
 func (p *Producer) IsTombstoned(lifetime time.Duration) bool {
 	return p.tombstoned && time.Since(p.tombstonedAt) < lifetime
 }
@@ -140,7 +142,7 @@ func (r *RegistrationDB) FindRegistrations(category string, key string, subkey s
 	return results
 }
 
-// FindProducers 查询所有
+// FindProducers 返回符合条件的生产者对象列表
 func (r *RegistrationDB) FindProducers(category string, key string, subkey string) Producers {
 	r.RLock()
 	defer r.RUnlock()
@@ -149,7 +151,7 @@ func (r *RegistrationDB) FindProducers(category string, key string, subkey strin
 		return ProducerMap2Slice(r.registrationMap[k]) // 取出ProducerMap中的所有值转化成列表对象Producers
 	}
 
-	results := make(map[string]struct{})
+	results := make(map[string]struct{}) // 仅用于生产者对象去重
 	var retProducers Producers
 	for k, producers := range r.registrationMap {
 		if !k.IsMatch(category, key, subkey) {
@@ -166,6 +168,7 @@ func (r *RegistrationDB) FindProducers(category string, key string, subkey strin
 	return retProducers
 }
 
+// LookupRegistrations 查询所有此生产者id对应下的注册信息Key
 func (r *RegistrationDB) LookupRegistrations(id string) Registrations {
 	r.RLock()
 	defer r.RUnlock()
@@ -219,12 +222,14 @@ func (rr Registrations) SubKeys() []string {
 	return subkeys
 }
 
+// FilterByActive 过滤出所有可用的生产者对象
 func (pp Producers) FilterByActive(inactivityTimeout time.Duration, tombstoneLifetime time.Duration) Producers {
 	now := time.Now()
 	results := Producers{}
 	for _, p := range pp {
 		cur := time.Unix(0, atomic.LoadInt64(&p.peerInfo.lastUpdate))
 		if now.Sub(cur) > inactivityTimeout || p.IsTombstoned(tombstoneLifetime) {
+			// 此生产者对象最近一次心跳时间间隔大于闲置的最长时间或生产者对象不可用且未达到不可用的截至时间时跳过统计(为真代表此生产者对象可能不可用)
 			continue
 		}
 		results = append(results, p)
@@ -232,6 +237,7 @@ func (pp Producers) FilterByActive(inactivityTimeout time.Duration, tombstoneLif
 	return results
 }
 
+// PeerInfo 返回生产者对象的nsqd成员信息
 func (pp Producers) PeerInfo() []*PeerInfo {
 	results := []*PeerInfo{}
 	for _, p := range pp {

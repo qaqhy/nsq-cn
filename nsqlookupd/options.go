@@ -17,8 +17,8 @@ type Options struct {
 	HTTPAddress      string `flag:"http-address"`      // 用于侦听HTTP客户端（默认值为“0.0.0.0:4161”）
 	BroadcastAddress string `flag:"broadcast-address"` // 服务发现的地址;默认为主机名,nsqd创建topic对象后会通过此地址同步所有注册的channel对象
 
-	InactiveProducerTimeout time.Duration `flag:"inactive-producer-timeout"`
-	TombstoneLifetime       time.Duration `flag:"tombstone-lifetime"`
+	InactiveProducerTimeout time.Duration `flag:"inactive-producer-timeout"` // 生产者不活跃最长超时时间(默认5分钟)，超过此时间证明此生产者不可用
+	TombstoneLifetime       time.Duration `flag:"tombstone-lifetime"`        // 生产者标记自己不可用的最长时间(默认45秒)，在此时间内此生产者对象仍然可用
 }
 
 func NewOptions() *Options {

@@ -35,18 +35,18 @@ func newHTTPServer(l *NSQLookupd) *httpServer {
 	router.Handle("GET", "/info", http_api.Decorate(s.doInfo, log, http_api.V1))             // 返回nsqlookupd版本信息
 
 	// v1 negotiate
-	router.Handle("GET", "/debug", http_api.Decorate(s.doDebug, log, http_api.V1)) // 返回注册关系DB对象的所有数据
-	router.Handle("GET", "/lookup", http_api.Decorate(s.doLookup, log, http_api.V1))
-	router.Handle("GET", "/topics", http_api.Decorate(s.doTopics, log, http_api.V1))
-	router.Handle("GET", "/channels", http_api.Decorate(s.doChannels, log, http_api.V1))
-	router.Handle("GET", "/nodes", http_api.Decorate(s.doNodes, log, http_api.V1))
+	router.Handle("GET", "/debug", http_api.Decorate(s.doDebug, log, http_api.V1))       // 返回注册关系DB对象的所有数据
+	router.Handle("GET", "/lookup", http_api.Decorate(s.doLookup, log, http_api.V1))     // 返回服务发现中对应topic下的所有生产者信息和频道channel信息
+	router.Handle("GET", "/topics", http_api.Decorate(s.doTopics, log, http_api.V1))     // 返回注册的所有topic信息
+	router.Handle("GET", "/channels", http_api.Decorate(s.doChannels, log, http_api.V1)) // 返回指定topic下对应的所有频道channel信息
+	router.Handle("GET", "/nodes", http_api.Decorate(s.doNodes, log, http_api.V1))       // 返回所有nsqd生产者对象的详细信息（包括nsqd的所有topic和对应是否为不可用的信息）
 
 	// only v1
-	router.Handle("POST", "/topic/create", http_api.Decorate(s.doCreateTopic, log, http_api.V1))
-	router.Handle("POST", "/topic/delete", http_api.Decorate(s.doDeleteTopic, log, http_api.V1))
-	router.Handle("POST", "/channel/create", http_api.Decorate(s.doCreateChannel, log, http_api.V1))
-	router.Handle("POST", "/channel/delete", http_api.Decorate(s.doDeleteChannel, log, http_api.V1))
-	router.Handle("POST", "/topic/tombstone", http_api.Decorate(s.doTombstoneTopicProducer, log, http_api.V1))
+	router.Handle("POST", "/topic/create", http_api.Decorate(s.doCreateTopic, log, http_api.V1))               // 注册topic到关系DB对象中,跟nsqd没有任何关系
+	router.Handle("POST", "/topic/delete", http_api.Decorate(s.doDeleteTopic, log, http_api.V1))               // 从关系DB对象中注销topic和对应的所有频道channel,跟nsqd没有任何关系
+	router.Handle("POST", "/channel/create", http_api.Decorate(s.doCreateChannel, log, http_api.V1))           // 注册指定topic中的频道channel到关系DB对象中,跟nsqd没有任何关系
+	router.Handle("POST", "/channel/delete", http_api.Decorate(s.doDeleteChannel, log, http_api.V1))           // 从关系DB对象中注销指定topic对应的频道channel,跟nsqd没有任何关系
+	router.Handle("POST", "/topic/tombstone", http_api.Decorate(s.doTombstoneTopicProducer, log, http_api.V1)) // 标记所有topic下的此nsqd生产者对象已不可用
 
 	// debug
 	router.HandlerFunc("GET", "/debug/pprof", pprof.Index)
@@ -79,6 +79,7 @@ func (s *httpServer) doInfo(w http.ResponseWriter, req *http.Request, ps httprou
 	}, nil
 }
 
+// doTopics 返回注册的所有topic信息
 func (s *httpServer) doTopics(w http.ResponseWriter, req *http.Request, ps httprouter.Params) (interface{}, error) {
 	topics := s.nsqlookupd.DB.FindRegistrations("topic", "*", "").Keys()
 	return map[string]interface{}{
@@ -86,6 +87,7 @@ func (s *httpServer) doTopics(w http.ResponseWriter, req *http.Request, ps httpr
 	}, nil
 }
 
+// doChannels 返回指定topic下对应的所有频道channel信息
 func (s *httpServer) doChannels(w http.ResponseWriter, req *http.Request, ps httprouter.Params) (interface{}, error) {
 	reqParams, err := http_api.NewReqParams(req)
 	if err != nil {
@@ -103,6 +105,7 @@ func (s *httpServer) doChannels(w http.ResponseWriter, req *http.Request, ps htt
 	}, nil
 }
 
+// doLookup 返回服务发现中对应topic下的所有生产者信息和频道channel信息
 func (s *httpServer) doLookup(w http.ResponseWriter, req *http.Request, ps httprouter.Params) (interface{}, error) {
 	reqParams, err := http_api.NewReqParams(req)
 	if err != nil {
@@ -122,13 +125,14 @@ func (s *httpServer) doLookup(w http.ResponseWriter, req *http.Request, ps httpr
 	channels := s.nsqlookupd.DB.FindRegistrations("channel", topicName, "*").SubKeys()
 	producers := s.nsqlookupd.DB.FindProducers("topic", topicName, "")
 	producers = producers.FilterByActive(s.nsqlookupd.opts.InactiveProducerTimeout,
-		s.nsqlookupd.opts.TombstoneLifetime)
+		s.nsqlookupd.opts.TombstoneLifetime) // 过滤出所有可用的生产者对象
 	return map[string]interface{}{
 		"channels":  channels,
-		"producers": producers.PeerInfo(),
+		"producers": producers.PeerInfo(), // 返回生产者对象的nsqd成员信息
 	}, nil
 }
 
+// doCreateTopic 注册topic到关系DB对象中,跟nsqd没有任何关系
 func (s *httpServer) doCreateTopic(w http.ResponseWriter, req *http.Request, ps httprouter.Params) (interface{}, error) {
 	reqParams, err := http_api.NewReqParams(req)
 	if err != nil {
@@ -151,6 +155,7 @@ func (s *httpServer) doCreateTopic(w http.ResponseWriter, req *http.Request, ps 
 	return nil, nil
 }
 
+// doDeleteTopic 从关系DB对象中注销topic和对应的所有频道channel,跟nsqd没有任何关系
 func (s *httpServer) doDeleteTopic(w http.ResponseWriter, req *http.Request, ps httprouter.Params) (interface{}, error) {
 	reqParams, err := http_api.NewReqParams(req)
 	if err != nil {
@@ -177,6 +182,7 @@ func (s *httpServer) doDeleteTopic(w http.ResponseWriter, req *http.Request, ps 
 	return nil, nil
 }
 
+// doTombstoneTopicProducer 标记所有topic下的此nsqd生产者对象已不可用
 func (s *httpServer) doTombstoneTopicProducer(w http.ResponseWriter, req *http.Request, ps httprouter.Params) (interface{}, error) {
 	reqParams, err := http_api.NewReqParams(req)
 	if err != nil {
@@ -205,6 +211,7 @@ func (s *httpServer) doTombstoneTopicProducer(w http.ResponseWriter, req *http.R
 	return nil, nil
 }
 
+// doCreateChannel 注册指定topic中的频道channel到关系DB对象中,跟nsqd没有任何关系
 func (s *httpServer) doCreateChannel(w http.ResponseWriter, req *http.Request, ps httprouter.Params) (interface{}, error) {
 	reqParams, err := http_api.NewReqParams(req)
 	if err != nil {
@@ -227,6 +234,7 @@ func (s *httpServer) doCreateChannel(w http.ResponseWriter, req *http.Request, p
 	return nil, nil
 }
 
+// doDeleteChannel 从关系DB对象中注销指定topic对应的频道channel,跟nsqd没有任何关系
 func (s *httpServer) doDeleteChannel(w http.ResponseWriter, req *http.Request, ps httprouter.Params) (interface{}, error) {
 	reqParams, err := http_api.NewReqParams(req)
 	if err != nil {
@@ -262,26 +270,26 @@ type node struct {
 	Topics           []string `json:"topics"`
 }
 
+// doNodes 返回所有nsqd生产者对象的详细信息（包括nsqd的所有topic和对应是否为不可用的信息）
 func (s *httpServer) doNodes(w http.ResponseWriter, req *http.Request, ps httprouter.Params) (interface{}, error) {
-	// dont filter out tombstoned nodes
+	// 不过滤掉逻辑删除的节点，获取所有可用的生产者对象
 	producers := s.nsqlookupd.DB.FindProducers("client", "", "").FilterByActive(
 		s.nsqlookupd.opts.InactiveProducerTimeout, 0)
 	nodes := make([]*node, len(producers))
 	topicProducersMap := make(map[string]Producers)
 	for i, p := range producers {
-		topics := s.nsqlookupd.DB.LookupRegistrations(p.peerInfo.id).Filter("topic", "*", "").Keys()
+		topics := s.nsqlookupd.DB.LookupRegistrations(p.peerInfo.id).Filter("topic", "*", "").Keys() // 获取topic对应的所有Key
 
-		// for each topic find the producer that matches this peer
-		// to add tombstone information
+		// 为每个主题topic找到与下标相对应的生产者逻辑删除信息
 		tombstones := make([]bool, len(topics))
 		for j, t := range topics {
 			if _, exists := topicProducersMap[t]; !exists {
-				topicProducersMap[t] = s.nsqlookupd.DB.FindProducers("topic", t, "")
+				topicProducersMap[t] = s.nsqlookupd.DB.FindProducers("topic", t, "") // 获取此topic注册的生产者对象列表
 			}
 
 			topicProducers := topicProducersMap[t]
 			for _, tp := range topicProducers {
-				if tp.peerInfo == p.peerInfo {
+				if tp.peerInfo == p.peerInfo { // 找到对应的nsqd生产者信息则判断此对象是否逻辑删除还可用
 					tombstones[j] = tp.IsTombstoned(s.nsqlookupd.opts.TombstoneLifetime)
 					break
 				}
