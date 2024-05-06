@@ -410,7 +410,7 @@ func (c *Channel) RequeueMessage(clientID int64, id MessageID, timeout time.Dura
 	return c.StartDeferredTimeout(msg, timeout)
 }
 
-// AddClient将客户端添加到频道Channel的客户端列表中
+// AddClient 将客户端添加到频道Channel的客户端列表中
 func (c *Channel) AddClient(clientID int64, client Consumer) error {
 	c.exitMutex.RLock()
 	defer c.exitMutex.RUnlock()
