@@ -3,6 +3,7 @@ dist/
 .cover/
 profile/
 
+.idea/
 # nsqd data from testing
 *.dat
 
